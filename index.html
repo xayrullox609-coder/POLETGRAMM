@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="uz"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Poletgram</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap">
+<style>
+*{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
+html,body{min-height:100%}
+body{font-family:Outfit,system-ui,-apple-system,"Segoe UI",sans-serif;background:#ece7e7;color:#2a0f1d;max-width:520px;margin:auto;overflow-x:hidden}
+#bg{position:fixed;inset:0;width:100%;height:100%;z-index:-1}
+#app{padding:12px 14px 120px}
+button{font:inherit;cursor:pointer;border:0;color:inherit}
+.pill{display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.85);border-radius:34px;padding:7px 10px 7px 8px;width:max-content;margin:0 auto 20px;box-shadow:0 6px 18px #c9708a22}
+.av{width:44px;height:44px;border-radius:50%;background:#111;border:3px solid #ff6b8f;box-shadow:0 0 0 3px #ffd0dc;display:grid;place-items:center;flex:none;position:relative}
+.av b{font-size:22px;font-weight:900;color:#e8c35a;line-height:1}
+.av i{position:absolute;bottom:25%;font-style:normal;font-size:5px;color:#e8c35a;font-weight:700;letter-spacing:.3px}
+.bal{background:#ffe6ec;border:1.5px solid #ffa9bd;border-radius:22px;padding:5px 14px;font-weight:700;font-size:17px}
+.pill>b{font-size:17px;font-weight:700}
+.sec{display:flex;justify-content:space-between;align-items:center;margin:0 4px 14px}
+.sec h2{font-size:22px;font-weight:800}
+.sec span{background:#ffe3ea;color:#ff6b8f;font-weight:600;font-size:15px;border-radius:14px;padding:5px 14px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.pc{background:#fff;border-radius:30px;padding:20px 16px 18px;text-align:left;box-shadow:0 6px 20px #c9708a1c}
+.lg{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;margin-bottom:12px}
+.lg svg{width:40px;height:40px}
+.pc b{display:block;font-size:19px;font-weight:800}
+.pc small{display:block;color:#6e5a62;font-size:14px;margin:2px 0 14px;font-weight:400}
+.st{display:inline-block;font-size:13px;font-weight:700;border-radius:14px;padding:4px 14px;border:1.5px solid}
+.g{color:#1a9a76;background:#e1f7ef;border-color:#a6e6d2}.bl{color:#1b9bd7;background:#e3f4fd;border-color:#a5daf3}.rd{color:#e8335a;background:#ffe4ea;border-color:#ffa3b6}
+.row{background:#fff;border-radius:28px;padding:14px 14px 14px 14px;margin-bottom:16px;display:flex;align-items:center;gap:14px;box-shadow:0 4px 16px #c9708a18;border:1px solid #ffe3ea;width:100%;text-align:left}
+.ic{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-size:23px;flex:none}
+.grow{flex:1;min-width:0}.grow b{display:block;font-size:17px;font-weight:800;line-height:1.15}.grow small{display:block;color:#6e5a62;font-size:14px;margin-top:3px;line-height:1.2}
+.tag{border:1.5px solid #1a9a76;color:#17384a;background:#e1f7ef;border-radius:16px;padding:3px 10px;font-weight:700;font-size:15px;white-space:nowrap}
+.btn{background:linear-gradient(90deg,#ff6b8f,#ff3d6b);color:#fff;font-weight:700;font-size:16px;border-radius:22px;padding:11px 19px;box-shadow:0 5px 12px #ff3d6b44}
+.btn:disabled{opacity:.55}
+.bn{align-items:center}.bn .grow{display:flex;flex-direction:column;align-items:flex-start;padding-left:6px}
+.bn .grow b{font-size:26px;font-weight:400;letter-spacing:.2px;margin-bottom:4px}
+.hero{background:rgba(255,255,255,.92);border-radius:32px;padding:20px 18px;display:flex;gap:18px;align-items:center;margin-bottom:18px;box-shadow:0 6px 20px #c9708a1c;position:relative}
+.hero .av{width:90px;height:90px;border-width:4px;box-shadow:0 0 0 5px #ffd0dc,0 0 0 8px #ffe7ee}
+.hero .av b{font-size:44px}.hero .av i{font-size:9px;bottom:26%}
+.hero strong{font-size:18px;font-weight:800;display:block;margin-bottom:6px}
+.big{font-size:38px;font-weight:800;line-height:1}.big small{font-size:15px;font-weight:500;color:#5b4650;margin-left:8px}
+.gl{position:absolute;top:18px;right:18px;font-size:30px}
+.mi{border-radius:20px;display:grid;place-items:center;width:60px;height:60px;flex:none;color:#fff;box-shadow:0 5px 12px #0002}
+.mi svg{width:30px;height:30px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ar{color:#ff5f86;font-size:22px;font-weight:700}
+.m .grow b{font-size:19px}
+nav{position:fixed;bottom:calc(10px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);width:min(492px,calc(100% - 28px));background:#fff;border-radius:34px;display:flex;padding:8px;box-shadow:0 8px 26px #c9708a33}
+nav button{flex:1;background:none;color:#b9858f;padding:9px 0 8px;border-radius:28px;font-size:14px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:3px}
+nav button svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+nav button.on{background:#ffe6ec;color:#2a0f1d}nav button.on svg{color:#ff5f86}
+.sheet{position:fixed;inset:0;background:#0006;display:flex;align-items:flex-end;justify-content:center;z-index:5}
+.sheet>div{background:#fff;width:100%;max-width:520px;border-radius:30px 30px 0 0;padding:22px 18px calc(26px + env(safe-area-inset-bottom,0px))}
+.sheet h2{font-size:20px;font-weight:800;margin-bottom:8px}
+input{width:100%;font:inherit;padding:13px 15px;border-radius:16px;border:1.5px solid #ffd0dc;background:#fff7f9;color:#2a0f1d;margin:6px 0;outline:0}
+.back{background:none;color:#ff3d6b;font-weight:700;margin:0 4px 12px;font-size:16px}
+.lb{display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid #ffe3ea}
+#toast{position:fixed;top:calc(14px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);background:#2a0f1d;color:#fff;padding:10px 18px;border-radius:20px;font-weight:600;z-index:9;opacity:0;transition:.3s;pointer-events:none;max-width:90%}
+#toast.on{opacity:1}
+</style></head><body>
+<svg id="bg" viewBox="0 0 360 800" preserveAspectRatio="xMidYMid slice"><defs><g id="f"><g fill="#e48aa0" fill-opacity=".5" stroke="#cf6a86" stroke-width="1.2"><circle cx="0" cy="-10" r="9"/><circle cx="9.5" cy="-3.1" r="9"/><circle cx="5.9" cy="8.1" r="9"/><circle cx="-5.9" cy="8.1" r="9"/><circle cx="-9.5" cy="-3.1" r="9"/></g><circle r="3.5" fill="none" stroke="#cf6a86" stroke-width="1.2"/></g></defs>
+<g fill="none" stroke="#d9788f" stroke-opacity=".6" stroke-width="1.3"><path d="M0 120C40 110 60 150 100 140M20 60C60 90 80 70 120 120M0 300C30 280 50 250 40 200"/><path d="M360 100C320 130 330 180 360 200M360 330C330 320 310 280 330 240M300 20C310 70 340 90 360 80"/><path d="M0 560C40 540 60 500 50 450M360 600C320 580 300 540 320 500"/></g>
+<g fill="#d9788f" fill-opacity=".55"><circle cx="30" cy="150" r="3"/><circle cx="75" cy="120" r="2.5"/><circle cx="330" cy="150" r="3"/><circle cx="345" cy="260" r="3"/><circle cx="20" cy="470" r="3"/></g>
+<use href="#f" transform="translate(40 640) scale(1.7)"/><use href="#f" transform="translate(120 705) scale(1.3)"/><use href="#f" transform="translate(300 600) scale(1.2)"/><use href="#f" transform="translate(238 690) scale(2.2)"/><use href="#f" transform="translate(345 520) scale(1.5)"/><use href="#f" transform="translate(15 520) scale(1)"/><use href="#f" transform="translate(335 420) scale(1)"/><use href="#f" transform="translate(340 320) scale(.9)"/><use href="#f" transform="translate(25 340) scale(.9)"/><use href="#f" transform="translate(20 780) scale(1.8)"/><use href="#f" transform="translate(340 770) scale(1.6)"/><use href="#f" transform="translate(335 60) scale(1)"/><use href="#f" transform="translate(30 40) scale(.9)"/>
+</svg>
+<div id="app"></div><div id="toast"></div>
+<script>
+const IG='<svg viewBox="0 0 40 40"><rect x="7" y="7" width="26" height="26" rx="8" fill="none" stroke="#fff" stroke-width="3"/><circle cx="20" cy="20" r="6" fill="none" stroke="#fff" stroke-width="3"/><circle cx="28" cy="12" r="1.8" fill="#fff"/></svg>';
+const TG='<svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="14" fill="#fff"/><path d="M10 19.5L29 12l-4 17-6-4.8-3 2.8v-4.8z" fill="#0a8bd6"/></svg>';
+const TT='<svg viewBox="0 0 40 40"><path d="M22 9v14a4.5 4.5 0 1 1-4.5-4.5M22 9c.6 3.6 3 5.6 6.5 5.8" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round"/></svg>';
+const STY={
+ Instagram:{ic:IG,bg:"linear-gradient(135deg,#f9a03c,#e1306c,#8a3ab9)",sub:"Prasmotr, Like, Share",tag:"AKTIV",cl:"g"},
+ Telegram:{ic:TG,bg:"#0a8bd6",sub:"Prasmotr & Reaksiya",tag:"TEZKOR",cl:"bl"},
+ TikTok:{ic:TT,bg:"linear-gradient(135deg,#19e6d6,#0b3b45 55%,#f0457f)",sub:"Video Rivoj",tag:"TREND",cl:"rd"}
+};
+const tg=window.Telegram&&Telegram.WebApp;
+try{if(tg){tg.ready();tg.expand();tg.setHeaderColor("#fde4ea");tg.setBackgroundColor("#ece7e7");tg.setBottomBarColor("#ece7e7")}}catch(e){}
+const BOT="Poletgram_bot";
+let S={tab:"boost",plat:null,me:{id:0,name:"",balance:0},tasks:[],svc:{},ref:20},ST={};
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money=n=>(+n).toFixed(2)+" $";
+const num=n=>+(+n).toFixed(2);
+function toast(t){const e=$("#toast");e.textContent=t;e.classList.add("on");setTimeout(()=>e.classList.remove("on"),2400)}
+async function api(p,b){
+ try{const r=await fetch("/api/"+p,{method:"POST",headers:{"Content-Type":"application/json","X-Init":tg?tg.initData:""},body:JSON.stringify(b||{})});
+  const j=await r.json();if(!r.ok)throw new Error(j.error||"Xatolik");return j}
+ catch(e){toast(e.message);throw e}}
+async function load(){const d=await api("init");S.me=d.me;S.tasks=d.tasks;S.svc=d.svc;S.ref=d.ref;render()}
+const AV=x=>`<div class="av"><b>X</b>${x?"<i>XAMIDOV</i>":""}</div>`;
+function pill(){return `<div class="pill">${AV()}<b>${esc(S.me.name)}</b><span class="bal">${money(S.me.balance)}</span></div>`}
+function boost(){
+ if(S.plat){const p=STY[S.plat];return pill()+`<button class="back" onclick="S.plat=null;render()">← Orqaga</button><div class="sec"><h2>${S.plat} xizmatlari</h2></div>`+
+  S.svc[S.plat].map((it,i)=>`<div class="row"><div class="lg" style="background:${p.bg}">${p.ic}</div><div class="grow"><b>${it[0]}</b><small>100 ta uchun</small></div><span class="tag">${money(it[1])}</span><button class="btn" onclick="order(${i})">Buyurtma</button></div>`).join("")}
+ return pill()+`<div class="sec"><h2>Xizmatlar</h2><span>Tezkor &amp; Kafolatli</span></div><div class="grid">`+Object.entries(STY).map(([n,p])=>`<button class="pc" onclick="S.plat='${n}';render()"><div class="lg" style="background:${p.bg}">${p.ic}</div><b>${n}</b><small>${p.sub}</small><span class="st ${p.cl}">${p.tag}</span></button>`).join("")+`</div>`}
+function order(i){const n=S.plat,it=S.svc[n][i];
+ sheet(`<h2>${n} · ${it[0]}</h2><input id="lk" placeholder="Havolani kiriting"><input id="qt" type="number" min="100" step="100" value="1000" oninput="cost(${i})"><p id="cs" style="margin:6px 0 12px;font-weight:700"></p><button class="btn" style="width:100%" onclick="buy(${i})">Buyurtma berish</button>`);cost(i)}
+function cost(i){const q=+$("#qt").value||0;$("#cs").textContent="Narx: "+money(q/100*S.svc[S.plat][i][1])}
+async function buy(i){const q=+$("#qt").value||0,c=q/100*S.svc[S.plat][i][1];
+ if(!$("#lk").value.trim())return toast("Havolani kiriting");if(q<100)return toast("Minimal miqdor 100");if(c>S.me.balance)return toast("Balans yetarli emas");
+ const r=await api("order",{platform:S.plat,service:S.svc[S.plat][i][0],link:$("#lk").value.trim(),qty:q});S.me=r.me;closeSheet();toast("Buyurtma qabul qilindi ✓");render()}
+function sheet(h){closeSheet();const d=document.createElement("div");d.className="sheet";d.id="sh";d.onclick=e=>{if(e.target===d)closeSheet()};d.innerHTML="<div>"+h+"</div>";document.body.appendChild(d)}
+function closeSheet(){const s=$("#sh");if(s)s.remove()}
+const TI={link:["#1fa84f","🔗"],youtube:["#e53935","▶"],ad:["#dbeaf6","📺"],bot:["#d9ecfb","🤖"],bonus:["#ffe6ec","🎁"]};
+const BT={link:"Ochish",youtube:"Ochish",ad:"Ko'rish",bot:"Start",bonus:"Bajarish"};
+function tasks(){
+ const rows=S.tasks.map(t=>{const x=TI[t.type]||TI.link,lab=t.done?"Bajarildi":ST[t.id]?"Tekshirish":(BT[t.type]||"Ochish");
+  const btn=`<button class="btn" ${t.done?"disabled":""} onclick="tap(${t.id})">${lab}</button>`,tag=`<span class="tag">+${num(t.reward)} $</span>`;
+  if(t.type=="bonus")return `<div class="row bn"><div class="ic" style="background:conic-gradient(#ff3d9a,#ffb300,#2ee6a6,#3d7bff,#b53dff,#ff3d9a);color:#fff;font-size:20px;width:54px;height:54px">⫶</div><div class="grow"><b>${esc(t.title)}</b>${tag}</div>${btn}</div>`;
+  return `<div class="row"><div class="ic" style="background:${x[0]};${t.type=="youtube"?"border-radius:16px;color:#fff;font-size:20px":""}">${x[1]}</div><div class="grow"><b>${esc(t.title)}</b><small>${esc(t.sub)}</small></div>${tag}${btn}</div>`}).join("")
+ ||`<div class="row"><div class="grow"><b>Hozircha vazifalar yo'q</b><small>Tez orada yangi vazifalar qo'shiladi</small></div></div>`;
+ return pill()+`<div class="sec"><h2>Vazifalar Ro'yxati</h2></div>`+rows+
+ `<div class="row"><div class="ic" style="background:#d9f2f2">👥</div><div class="grow"><b>Do'st Taklif Qilish</b><small>Har bir faol do'stingiz uchun</small></div><span class="tag">+${num(S.ref)} $</span><button class="btn" onclick="invite()">Taklif</button></div>`}
+function go(u){if(!u)return;if(tg&&/^https:\/\/t\.me\//.test(u))tg.openTelegramLink(u);else if(tg)tg.openLink(u);else window.open(u,"_blank")}
+async function tap(id){
+ const t=S.tasks.find(x=>x.id==id);if(!t||t.done)return;
+ if(t.type!="bonus"&&!ST[id]){const r=await api("task/start",{id});ST[id]=Date.now();go(r.url);render();return}
+ if(t.type!="bonus"&&Date.now()-ST[id]<10000)return toast("Vazifani bajaring, kamida 10 soniya kuting");
+ const r=await api("task/claim",{id});S.me=r.me;t.done=true;delete ST[id];toast("+"+num(t.reward)+" $");render()}
+function invite(){const l=`https://t.me/${BOT}?start=ref_${S.me.id}`,sh=`https://t.me/share/url?url=${encodeURIComponent(l)}&text=${encodeURIComponent("Poletgram — vazifa bajarib pul yig'ing 💸")}`;
+ sheet(`<h2>Do'st Taklif Qilish</h2><p style="color:#6e5a62;margin:6px 0">Har bir faol do'stingiz uchun +${num(S.ref)} $</p><input readonly value="${l}" onclick="this.select()"><button class="btn" style="width:100%;margin-top:8px" onclick="go('${sh}')">Ulashish</button>`)}
+function profile(){
+ const m=(bg,svg,t,s,fn)=>`<button class="row m" onclick="${fn}"><div class="mi" style="background:${bg}"><svg viewBox="0 0 24 24">${svg}</svg></div><div class="grow"><b>${t}</b><small>${s}</small></div><span class="ar">→</span></button>`;
+ return `<div class="hero">${AV(1)}<div><strong>${esc(S.me.name)}</strong><div class="big">${money(S.me.balance)}<small>Dollar Balansi</small></div></div><span class="gl">🌐</span></div>`+
+ m("linear-gradient(135deg,#ffc04d,#f08a3c)",'<path d="M3 18h18l1-10-5 4-5-7-5 7-5-4z"/>',"Pullik Xizmatlar","SMM xizmatlari — obunachilar, layklar, prasmotr","S.tab='boost';render()")+
+ m("linear-gradient(135deg,#19d6a0,#0fb892)",'<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',"Pul Yuborish","Boshqa foydalanuvchiga dollar o'tkazish","send()")+
+ m("linear-gradient(135deg,#ff6b6b,#ff3d6b)",'<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4v2a3 3 0 0 0 3 3M17 6h3v2a3 3 0 0 1-3 3"/>',"Musobaqa","Eng ko'p do'st taklif qilganlar va sovrinlar","contest()")+
+ m("linear-gradient(135deg,#ff5f9a,#f0457f)",'<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.2"/>',"Promokod","Promokod kiriting va bonuslarga ega bo'ling","promo()")}
+function send(){sheet(`<h2>Pul Yuborish</h2><input id="u" placeholder="@username"><input id="a" type="number" step="0.01" placeholder="Summa ($)"><button class="btn" style="width:100%;margin-top:8px" onclick="doSend()">Yuborish</button>`)}
+async function doSend(){const u=$("#u").value.trim(),a=+$("#a").value;if(!u)return toast("Username kiriting");if(!(a>0))return toast("Summani kiriting");if(a>S.me.balance)return toast("Balans yetarli emas");
+ const r=await api("send",{to:u,amount:a});S.me=r.me;closeSheet();toast(money(a)+" yuborildi ✓");render()}
+async function contest(){const d=await api("top");sheet(`<h2>Musobaqa</h2><p style="color:#6e5a62;margin-bottom:8px">Eng ko'p do'st taklif qilganlar</p>`+(d.top.map((x,i)=>`<div class="lb"><b>${i+1}</b><span class="grow">${esc(x.n)}</span><b>${x.c} ta</b></div>`).join("")||"<p>Hozircha hech kim yo'q</p>")+`<button class="btn" style="width:100%;margin-top:14px" onclick="closeSheet()">Yopish</button>`)}
+function promo(){sheet(`<h2>Promokod</h2><input id="pc" placeholder="Promokodni kiriting"><button class="btn" style="width:100%;margin-top:8px" onclick="doPromo()">Qo'llash</button>`)}
+async function doPromo(){const c=$("#pc").value.trim();if(!c)return;const r=await api("promo",{code:c});S.me=r.me;closeSheet();toast("Promokod: +"+num(r.amount)+" $");render()}
+const NAV=[["boost",'<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',"Boost"],["tasks",'<rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 12l3 3 6-7"/>',"Vazifalar"],["profile",'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/>',"Profil"]];
+function render(){
+ $("#app").innerHTML={boost,tasks,profile}[S.tab]();
+ let n=document.querySelector("nav");if(!n){n=document.createElement("nav");document.body.appendChild(n)}
+ n.innerHTML=NAV.map(t=>`<button class="${S.tab==t[0]?"on":""}" onclick="S.tab='${t[0]}';S.plat=null;render();scrollTo(0,0)"><svg viewBox="0 0 24 24">${t[1]}</svg>${t[2]}</button>`).join("")}
+$("#app").innerHTML="<p style='padding:60px 0;text-align:center;font-weight:600'>Yuklanmoqda…</p>";
+load().catch(()=>{$("#app").innerHTML="<p style='padding:60px 20px;text-align:center;font-weight:600'>Ilovani Telegramdagi @"+BOT+" boti orqali oching</p>"});
+</script></body></html>
