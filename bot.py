@@ -42,6 +42,11 @@ CREATE TABLE IF NOT EXISTS promo_used(user_id INTEGER,code TEXT,PRIMARY KEY(user
 CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,platform TEXT,service TEXT,link TEXT,qty INTEGER,cost REAL,ts INTEGER);
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT);
 """)
+try:
+    db.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'new'")
+    db.commit()
+except sqlite3.OperationalError:
+    pass
 
 
 def setting(k, d):
@@ -52,14 +57,17 @@ def setting(k, d):
 def touch(u, ref=None):
     name = "@" + u["username"] if u.get("username") else (u.get("first_name") or "User")
     r = db.execute("SELECT id FROM users WHERE id=?", (u["id"],)).fetchone()
+    new = None
     if r is None:
         if ref == u["id"] or not db.execute("SELECT 1 FROM users WHERE id=?", (ref,)).fetchone():
             ref = None
         db.execute("INSERT INTO users(id,username,name,balance,ref_by,created) VALUES(?,?,?,0,?,?)",
                    (u["id"], u.get("username"), name, ref, int(time.time())))
+        new = ref
     else:
         db.execute("UPDATE users SET username=?,name=? WHERE id=?", (u.get("username"), name, u["id"]))
     db.commit()
+    return new
 
 
 # ---------- Telegram initData tekshiruvi ----------
@@ -73,9 +81,22 @@ def check(init):
             return None
         if time.time() - int(d["auth_date"]) > 86400:
             return None
-        return json.loads(d["user"])
+        u = json.loads(d["user"])
+        u["_sp"] = d.get("start_param", "")
+        return u
     except Exception:
         return None
+
+
+async def safe_send(uid, text):
+    try:
+        await bot.send_message(uid, text)
+    except Exception:
+        pass
+
+
+def tell(uid, text):
+    asyncio.create_task(safe_send(uid, text))
 
 
 def jr(d, s=200):
@@ -86,7 +107,11 @@ def need(req):
     u = check(req.headers.get("X-Init", ""))
     if not u:
         raise web.HTTPUnauthorized(text='{"error":"Ilovani Telegram orqali oching"}', content_type="application/json")
-    touch(u)
+    sp = u.get("_sp", "")
+    ref = int(sp[4:]) if sp.startswith("ref_") and sp[4:].isdigit() else None
+    r = touch(u, ref)
+    if r:
+        tell(r, "👋 Do'stingiz qo'shildi! U birinchi vazifani bajarganda mukofot olasiz.")
     return u["id"]
 
 
@@ -99,7 +124,8 @@ async def body(req):
 
 def me(uid):
     r = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
-    return {"id": r["id"], "name": r["name"], "balance": round(r["balance"], 2)}
+    c = db.execute("SELECT COUNT(*) t,COALESCE(SUM(ref_paid),0) a FROM users WHERE ref_by=?", (uid,)).fetchone()
+    return {"id": r["id"], "name": r["name"], "balance": round(r["balance"], 2), "refs": c["t"], "active": c["a"]}
 
 
 def get_task(i):
@@ -137,7 +163,8 @@ async def api_init(req):
     done = {r[0] for r in db.execute("SELECT task_id FROM done WHERE user_id=?", (uid,))}
     ts = [{"id": t["id"], "type": t["type"], "title": t["title"], "sub": t["sub"], "reward": t["reward"],
            "done": t["id"] in done} for t in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")]
-    return jr({"me": me(uid), "tasks": ts, "svc": SERVICES, "ref": float(setting("ref", "20"))})
+    return jr({"me": me(uid), "tasks": ts, "svc": SERVICES, "ref": float(setting("ref", "20")),
+                "admin": uid in ADMINS})
 
 
 @routes.post("/api/task/start")
@@ -244,6 +271,74 @@ async def api_top(req):
     return jr({"top": [{"n": r["n"], "c": r["c"]} for r in rows]})
 
 
+def admin_data():
+    u = db.execute("SELECT COUNT(*) c,COALESCE(SUM(balance),0) b FROM users").fetchone()
+    return {
+        "stats": {"users": u["c"], "bal": round(u["b"], 2), "orders": db.execute("SELECT COUNT(*) FROM orders").fetchone()[0]},
+        "tasks": [dict(id=x["id"], type=x["type"], title=x["title"], sub=x["sub"], url=x["url"], reward=x["reward"])
+                  for x in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")],
+        "promos": [dict(code=x["code"], amount=x["amount"], uses=x["uses"]) for x in db.execute("SELECT * FROM promos")],
+        "orders": [dict(id=x["id"], user=x["user_id"], platform=x["platform"], service=x["service"], link=x["link"],
+                        qty=x["qty"], cost=x["cost"], status=x["status"])
+                   for x in db.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 20")],
+        "ref": float(setting("ref", "20")),
+    }
+
+
+async def broadcast(txt):
+    for r in db.execute("SELECT id FROM users").fetchall():
+        await safe_send(r["id"], txt)
+        await asyncio.sleep(0.05)
+
+
+@routes.post("/api/admin/{act}")
+async def api_admin(req):
+    uid = need(req)
+    if uid not in ADMINS:
+        return jr({"error": "Ruxsat yo'q"}, 403)
+    act = req.match_info["act"]
+    b = await body(req)
+    try:
+        if act == "data":
+            pass
+        elif act == "task_add":
+            typ = str(b.get("type"))
+            if typ not in TYPES or not str(b.get("title", "")).strip():
+                raise ValueError
+            db.execute("INSERT INTO tasks(type,title,sub,url,reward) VALUES(?,?,?,?,?)",
+                       (typ, str(b["title"]).strip()[:100], str(b.get("sub", ""))[:150], str(b.get("url", "")).strip()[:300], float(b["reward"])))
+        elif act == "task_del":
+            db.execute("UPDATE tasks SET active=0 WHERE id=?", (int(b["id"]),))
+        elif act == "promo_add":
+            db.execute("INSERT OR REPLACE INTO promos VALUES(?,?,?)", (str(b["code"]).strip().upper(), float(b["amount"]), int(b["uses"])))
+        elif act == "promo_del":
+            db.execute("DELETE FROM promos WHERE code=?", (str(b["code"]),))
+        elif act == "ref":
+            db.execute("INSERT OR REPLACE INTO settings VALUES('ref',?)", (str(float(b["amount"])),))
+        elif act == "bal":
+            who = str(b["user"]).strip().lstrip("@")
+            r = db.execute("SELECT id FROM users WHERE id=? OR lower(username)=?", (int(who) if who.isdigit() else -1, who.lower())).fetchone()
+            if not r:
+                return jr({"error": "Foydalanuvchi topilmadi"}, 400)
+            db.execute("UPDATE users SET balance=balance+? WHERE id=?", (float(b["amount"]), r["id"]))
+        elif act == "order_done":
+            o = db.execute("SELECT * FROM orders WHERE id=?", (int(b["id"]),)).fetchone()
+            if o and o["status"] != "done":
+                db.execute("UPDATE orders SET status='done' WHERE id=?", (o["id"],))
+                tell(o["user_id"], f"✅ Buyurtmangiz bajarildi: {o['platform']} · {o['service']} × {o['qty']}")
+        elif act == "post":
+            txt = str(b.get("text", "")).strip()
+            if not txt:
+                raise ValueError
+            asyncio.create_task(broadcast(txt))
+        else:
+            return jr({"error": "Noma'lum amal"}, 400)
+    except (KeyError, ValueError, TypeError):
+        return jr({"error": "Ma'lumotlar noto'g'ri"}, 400)
+    db.commit()
+    return jr({"data": admin_data()})
+
+
 async def health(req):
     return web.Response(text="ok")
 
@@ -269,7 +364,9 @@ async def index(req):
 async def cmd_start(m: Message, command: CommandObject):
     a = command.args or ""
     ref = int(a[4:]) if a.startswith("ref_") and a[4:].isdigit() else None
-    touch({"id": m.from_user.id, "username": m.from_user.username, "first_name": m.from_user.first_name}, ref)
+    r = touch({"id": m.from_user.id, "username": m.from_user.username, "first_name": m.from_user.first_name}, ref)
+    if r:
+        tell(r, "👋 Do'stingiz qo'shildi! U birinchi vazifani bajarganda mukofot olasiz.")
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Poletgram'ni ochish", web_app=WebAppInfo(url=URL))]])
     await m.answer(START_TEXT, reply_markup=kb)
 
@@ -282,19 +379,8 @@ def is_admin(m):
 async def cmd_admin(m: Message):
     if not is_admin(m):
         return
-    await m.answer(
-        "🛠 Admin buyruqlari\n\n"
-        "/addtask tur | sarlavha | tavsif | havola | mukofot\n"
-        "  turlar: link, youtube, ad, bot, bonus\n"
-        "  Misol: /addtask youtube | Videoni ko'ring | Videoni oxirigacha ko'ring | https://youtu.be/xxx | 1\n"
-        "  Misol: /addtask bot | Botga start bosing | @bot ni ishga tushiring | https://t.me/bot?start=x | 2\n"
-        "/tasks — vazifalar ro'yxati\n"
-        "/deltask ID — vazifani o'chirish\n"
-        "/addpromo KOD summa limit\n"
-        "/setref summa — do'st uchun mukofot\n"
-        "/addbal user_id summa\n"
-        "/stats — statistika\n"
-        "/post matn — hammaga xabar yuborish")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🛠 Admin panel", web_app=WebAppInfo(url=URL))]])
+    await m.answer("Admin panel mini ilovaning Profil bo'limida ham bor.", reply_markup=kb)
 
 
 @dp.message(Command("addtask"))

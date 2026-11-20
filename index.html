@@ -58,6 +58,7 @@ input{width:100%;font:inherit;padding:9.9px 11.4px;border-radius:12.2px;border:1
 .lb{display:flex;gap:7.6px;align-items:center;padding:6.8px 0;border-bottom:1px solid #ffe3ea}
 #toast{position:fixed;top:calc(14px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);background:#2a0f1d;color:#fff;padding:7.6px 13.7px;border-radius:15.2px;font-weight:600;z-index:9;opacity:0;transition:.3s;pointer-events:none;max-width:90%}
 #toast.on{opacity:1}
+.card{background:#fff;border-radius:20px;padding:12px;margin-bottom:12px;box-shadow:0 3px 12px #c9708a18;border:1px solid #ffe3ea}.card h3{font-size:14px;margin-bottom:6px}.card small{display:block;color:#6e5a62;font-size:11px;word-break:break-all}.card input,.card select,.card textarea{width:100%;font:inherit;font-size:13px;padding:9px 11px;border-radius:12px;border:1.5px solid #ffd0dc;background:#fff7f9;color:#2a0f1d;margin:4px 0;outline:0}.card .w{width:100%;margin-top:6px;padding:9px;font-size:13px}.li{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #ffe3ea}.li b{font-size:12.5px;display:block}.mini{background:#ffe6ec;color:#ff3d6b;border-radius:10px;padding:5px 9px;font-weight:800}.mini.ok{background:#e1f7ef;color:#1a9a76}
 </style></head><body>
 <svg id="bg" viewBox="0 0 360 800" preserveAspectRatio="xMidYMid slice"><defs><g id="f"><g fill="#e48aa0" fill-opacity=".5" stroke="#cf6a86" stroke-width="1.2"><circle cx="0" cy="-10" r="9"/><circle cx="9.5" cy="-3.1" r="9"/><circle cx="5.9" cy="8.1" r="9"/><circle cx="-5.9" cy="8.1" r="9"/><circle cx="-9.5" cy="-3.1" r="9"/></g><circle r="3.5" fill="none" stroke="#cf6a86" stroke-width="1.2"/></g></defs>
 <g fill="none" stroke="#d9788f" stroke-opacity=".6" stroke-width="1.3"><path d="M0 120C40 110 60 150 100 140M20 60C60 90 80 70 120 120M0 300C30 280 50 250 40 200"/><path d="M360 100C320 130 330 180 360 200M360 330C330 320 310 280 330 240M300 20C310 70 340 90 360 80"/><path d="M0 560C40 540 60 500 50 450M360 600C320 580 300 540 320 500"/></g>
@@ -87,7 +88,7 @@ async function api(p,b){
  try{const r=await fetch("/api/"+p,{method:"POST",headers:{"Content-Type":"application/json","X-Init":tg?tg.initData:""},body:JSON.stringify(b||{})});
   const j=await r.json();if(!r.ok)throw new Error(j.error||"Xatolik");return j}
  catch(e){toast(e.message);throw e}}
-async function load(){const d=await api("init");S.me=d.me;S.tasks=d.tasks;S.svc=d.svc;S.ref=d.ref;render()}
+async function load(){const d=await api("init");S.me=d.me;S.tasks=d.tasks;S.svc=d.svc;S.ref=d.ref;S.admin=d.admin;render()}
 const AV=x=>`<div class="av"><b>X</b>${x?"<i>XAMIDOV</i>":""}</div>`;
 function pill(){return `<div class="pill">${AV()}<b>${esc(S.me.name)}</b><span class="bal">${money(S.me.balance)}</span></div>`}
 function boost(){
@@ -118,26 +119,44 @@ async function tap(id){
  if(t.type!="bonus"&&!ST[id]){const r=await api("task/start",{id});ST[id]=Date.now();go(r.url);render();return}
  if(t.type!="bonus"&&Date.now()-ST[id]<10000)return toast("Vazifani bajaring, kamida 10 soniya kuting");
  const r=await api("task/claim",{id});S.me=r.me;t.done=true;delete ST[id];toast("+"+num(t.reward)+" $");render()}
-function invite(){const l=`https://t.me/${BOT}?start=ref_${S.me.id}`,sh=`https://t.me/share/url?url=${encodeURIComponent(l)}&text=${encodeURIComponent("Poletgram — vazifa bajarib pul yig'ing 💸")}`;
- sheet(`<h2>Do'st Taklif Qilish</h2><p style="color:#6e5a62;margin:6px 0">Har bir faol do'stingiz uchun +${num(S.ref)} $</p><input readonly value="${l}" onclick="this.select()"><button class="btn" style="width:100%;margin-top:8px" onclick="go('${sh}')">Ulashish</button>`)}
+function invite(){const l=`https://t.me/${BOT}?start=ref_${S.me.id}`;
+ S.sh=`https://t.me/share/url?url=${encodeURIComponent(l)}&text=${encodeURIComponent("Poletgram — vazifa bajarib pul yig'ing 💸").replace(/'/g,"%27")}`;
+ sheet(`<h2>Do'st Taklif Qilish</h2><p style="color:#6e5a62;margin:4px 0">Har bir faol do'stingiz uchun +${num(S.ref)} $</p><p style="margin:2px 0 8px;font-weight:700">Taklif qilganlar: ${S.me.refs||0} · Faol: ${S.me.active||0}</p><input readonly id="rl" value="${l}" onclick="this.select()"><button class="btn" style="width:100%;margin-top:8px" onclick="go(S.sh)">Ulashish</button><button class="btn" style="width:100%;margin-top:8px;background:#ffe6ec;color:#ff3d6b;box-shadow:none" onclick="copyRef()">Nusxa olish</button>`)}
+function copyRef(){const i=$("#rl");try{navigator.clipboard.writeText(i.value).then(()=>toast("Nusxa olindi ✓"))}catch(e){i.select();document.execCommand("copy");toast("Nusxa olindi ✓")}}
 function profile(){
  const m=(bg,svg,t,s,fn)=>`<button class="row m" onclick="${fn}"><div class="mi" style="background:${bg}"><svg viewBox="0 0 24 24">${svg}</svg></div><div class="grow"><b>${t}</b><small>${s}</small></div><span class="ar">→</span></button>`;
  return `<div class="hero">${AV(1)}<div><strong>${esc(S.me.name)}</strong><div class="big">${money(S.me.balance)}<small>Dollar Balansi</small></div></div><span class="gl">🌐</span></div>`+
  m("linear-gradient(135deg,#ffc04d,#f08a3c)",'<path d="M3 18h18l1-10-5 4-5-7-5 7-5-4z"/>',"Pullik Xizmatlar","SMM xizmatlari — obunachilar, layklar, prasmotr","S.tab='boost';render()")+
  m("linear-gradient(135deg,#19d6a0,#0fb892)",'<path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/>',"Pul Yuborish","Boshqa foydalanuvchiga dollar o'tkazish","send()")+
  m("linear-gradient(135deg,#ff6b6b,#ff3d6b)",'<path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 6H4v2a3 3 0 0 0 3 3M17 6h3v2a3 3 0 0 1-3 3"/>',"Musobaqa","Eng ko'p do'st taklif qilganlar va sovrinlar","contest()")+
- m("linear-gradient(135deg,#ff5f9a,#f0457f)",'<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.2"/>',"Promokod","Promokod kiriting va bonuslarga ega bo'ling","promo()")}
+ m("linear-gradient(135deg,#ff5f9a,#f0457f)",'<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.2"/>',"Promokod","Promokod kiriting va bonuslarga ega bo'ling","promo()")+(S.admin?m("linear-gradient(135deg,#6c63ff,#4a3fe0)",'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>',"Admin panel","Vazifalar, promokod, xabar va buyurtmalar","openAdmin()"):"")}
 function send(){sheet(`<h2>Pul Yuborish</h2><input id="u" placeholder="@username"><input id="a" type="number" step="0.01" placeholder="Summa ($)"><button class="btn" style="width:100%;margin-top:8px" onclick="doSend()">Yuborish</button>`)}
 async function doSend(){const u=$("#u").value.trim(),a=+$("#a").value;if(!u)return toast("Username kiriting");if(!(a>0))return toast("Summani kiriting");if(a>S.me.balance)return toast("Balans yetarli emas");
  const r=await api("send",{to:u,amount:a});S.me=r.me;closeSheet();toast(money(a)+" yuborildi ✓");render()}
 async function contest(){const d=await api("top");sheet(`<h2>Musobaqa</h2><p style="color:#6e5a62;margin-bottom:8px">Eng ko'p do'st taklif qilganlar</p>`+(d.top.map((x,i)=>`<div class="lb"><b>${i+1}</b><span class="grow">${esc(x.n)}</span><b>${x.c} ta</b></div>`).join("")||"<p>Hozircha hech kim yo'q</p>")+`<button class="btn" style="width:100%;margin-top:14px" onclick="closeSheet()">Yopish</button>`)}
 function promo(){sheet(`<h2>Promokod</h2><input id="pc" placeholder="Promokodni kiriting"><button class="btn" style="width:100%;margin-top:8px" onclick="doPromo()">Qo'llash</button>`)}
 async function doPromo(){const c=$("#pc").value.trim();if(!c)return;const r=await api("promo",{code:c});S.me=r.me;closeSheet();toast("Promokod: +"+num(r.amount)+" $");render()}
+const TN={link:"Havola",youtube:"YouTube",ad:"Reklama",bot:"Bot start",bonus:"Bonus"};
+const v=id=>$("#"+id).value.trim();
+async function openAdmin(){S.adm=(await api("admin/data")).data;S.tab="admin";render();scrollTo(0,0)}
+async function adm(act,b,msg){const r=await api("admin/"+act,b||{});S.adm=r.data;toast(msg||"Bajarildi ✓");render()}
+async function admL(act,b,msg){await adm(act,b,msg);await load()}
+function admin(){const a=S.adm,x=f=>`<button class="mini" onclick="${f}">✕</button>`;
+ return `<button class="back" onclick="S.tab='profile';render()">← Orqaga</button><div class="sec"><h2>Admin panel</h2></div>
+ <div class="card"><b>👥 ${a.stats.users} &nbsp; 💰 ${a.stats.bal} $ &nbsp; 🛒 ${a.stats.orders}</b><small>Foydalanuvchilar · umumiy balans · buyurtmalar</small></div>
+ <div class="card"><h3>Vazifalar</h3>${a.tasks.map(t=>`<div class="li"><div class="grow"><b>${esc(t.title)}</b><small>${TN[t.type]} · +${num(t.reward)} $ · ${esc(t.url)}</small></div>${x("admL('task_del',{id:"+t.id+"})")}</div>`).join("")||"<small>Vazifa yo'q</small>"}
+ <select id="tt">${Object.entries(TN).map(([k,n])=>`<option value="${k}">${n}</option>`).join("")}</select><input id="tti" placeholder="Sarlavha"><input id="tsu" placeholder="Tavsif"><input id="tur" placeholder="Havola (https://...)"><input id="trw" type="number" step="0.01" placeholder="Mukofot ($)"><button class="btn w" onclick="admL('task_add',{type:v('tt'),title:v('tti'),sub:v('tsu'),url:v('tur'),reward:v('trw')})">Vazifa qo'shish</button></div>
+ <div class="card"><h3>Promokodlar</h3>${a.promos.map(p=>`<div class="li"><div class="grow"><b>${esc(p.code)}</b><small>${num(p.amount)} $ · qoldi: ${p.uses}</small></div>${x("adm('promo_del',{code:'"+esc(p.code)+"'})")}</div>`).join("")||"<small>Promokod yo'q</small>"}
+ <input id="pcd" placeholder="KOD"><input id="pam" type="number" step="0.01" placeholder="Summa ($)"><input id="pus" type="number" placeholder="Necha marta ishlatiladi"><button class="btn w" onclick="adm('promo_add',{code:v('pcd'),amount:v('pam'),uses:v('pus')})">Promokod qo'shish</button></div>
+ <div class="card"><h3>Do'st taklif mukofoti</h3><input id="rfa" type="number" step="0.01" value="${a.ref}"><button class="btn w" onclick="admL('ref',{amount:v('rfa')})">Saqlash</button></div>
+ <div class="card"><h3>Balans qo'shish / ayirish</h3><input id="bu" placeholder="ID yoki @username"><input id="ba" type="number" step="0.01" placeholder="Summa (ayirish uchun minus)"><button class="btn w" onclick="adm('bal',{user:v('bu'),amount:v('ba')})">Bajarish</button></div>
+ <div class="card"><h3>Hammaga xabar</h3><textarea id="pt" rows="3" placeholder="Xabar matni"></textarea><button class="btn w" onclick="adm('post',{text:$('#pt').value},'Yuborilmoqda…')">Yuborish</button></div>
+ <div class="card"><h3>Oxirgi buyurtmalar</h3>${a.orders.map(o=>`<div class="li"><div class="grow"><b>#${o.id} ${esc(o.platform)} · ${esc(o.service)} × ${o.qty}</b><small>ID ${o.user} · ${o.cost} $ · ${esc(o.link)}</small></div>${o.status=="done"?"✅":`<button class="mini ok" onclick="adm('order_done',{id:${o.id}})">✓</button>`}</div>`).join("")||"<small>Buyurtma yo'q</small>"}</div>`}
 const NAV=[["boost",'<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>',"Boost"],["tasks",'<rect x="3" y="4" width="18" height="17" rx="3"/><path d="M8 12l3 3 6-7"/>',"Vazifalar"],["profile",'<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/>',"Profil"]];
 function render(){
- $("#app").innerHTML={boost,tasks,profile}[S.tab]();
+ $("#app").innerHTML={boost,tasks,profile,admin}[S.tab]();
  let n=document.querySelector("nav");if(!n){n=document.createElement("nav");document.body.appendChild(n)}
- n.innerHTML=NAV.map(t=>`<button class="${S.tab==t[0]?"on":""}" onclick="S.tab='${t[0]}';S.plat=null;render();scrollTo(0,0)"><svg viewBox="0 0 24 24">${t[1]}</svg>${t[2]}</button>`).join("")}
+ n.innerHTML=NAV.map(t=>`<button class="${(S.tab==t[0]||(S.tab=="admin"&&t[0]=="profile"))?"on":""}" onclick="S.tab='${t[0]}';S.plat=null;render();scrollTo(0,0)"><svg viewBox="0 0 24 24">${t[1]}</svg>${t[2]}</button>`).join("")}
 $("#app").innerHTML="<p style='padding:60px 0;text-align:center;font-weight:600'>Yuklanmoqda…</p>";
 load().catch(()=>{$("#app").innerHTML="<p style='padding:60px 20px;text-align:center;font-weight:600'>Ilovani Telegramdagi @"+BOT+" boti orqali oching</p>"});
 </script></body></html>
