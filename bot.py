@@ -7,7 +7,9 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, W
 
 TOKEN = os.environ["BOT_TOKEN"]
 ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
-URL = os.environ["WEBAPP_URL"].rstrip("/")
+URL = (os.environ.get("WEBAPP_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
+if not URL:
+    raise SystemExit("WEBAPP_URL topilmadi: Render > Environment bo'limiga WEBAPP_URL qo'shing")
 PORT = int(os.environ.get("PORT", 8080))
 DB = os.environ.get("DB_PATH", "poletgram.db")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -242,6 +244,22 @@ async def api_top(req):
     return jr({"top": [{"n": r["n"], "c": r["c"]} for r in rows]})
 
 
+async def health(req):
+    return web.Response(text="ok")
+
+
+async def keepalive():
+    import aiohttp
+    await asyncio.sleep(60)
+    while True:
+        try:
+            async with aiohttp.ClientSession() as ses:
+                await ses.get(URL + "/health", timeout=aiohttp.ClientTimeout(total=20))
+        except Exception:
+            pass
+        await asyncio.sleep(540)
+
+
 async def index(req):
     return web.FileResponse(os.path.join(HERE, "index.html"), headers={"Cache-Control": "no-store"})
 
@@ -378,10 +396,12 @@ async def main():
     app = web.Application()
     app.add_routes(routes)
     app.router.add_get("/", index)
+    app.router.add_get("/health", health)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
     await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="Poletgram", web_app=WebAppInfo(url=URL)))
+    asyncio.create_task(keepalive())
     await dp.start_polling(bot)
 
 
