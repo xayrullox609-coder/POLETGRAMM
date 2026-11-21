@@ -1,4 +1,4 @@
-import os, json, time, hmac, hashlib, sqlite3, asyncio, logging
+import re, os, json, time, hmac, hashlib, sqlite3, asyncio, logging
 from urllib.parse import parse_qsl
 from aiohttp import web
 from aiogram import Bot, Dispatcher
@@ -164,7 +164,7 @@ async def api_init(req):
     ts = [{"id": t["id"], "type": t["type"], "title": t["title"], "sub": t["sub"], "reward": t["reward"],
            "done": t["id"] in done} for t in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")]
     return jr({"me": me(uid), "tasks": ts, "svc": SERVICES, "ref": float(setting("ref", "20")),
-                "admin": uid in ADMINS})
+                "admin": uid in ADMINS, "ui": json.loads(setting("ui", "{}"))})
 
 
 @routes.post("/api/task/start")
@@ -271,6 +271,35 @@ async def api_top(req):
     return jr({"top": [{"n": r["n"], "c": r["c"]} for r in rows]})
 
 
+HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def clean_ui(raw):
+    if not isinstance(raw, dict):
+        raise ValueError
+    out = {}
+    for k, c in list(raw.items())[:80]:
+        if not isinstance(c, dict) or not re.fullmatch(r"[A-Za-z0-9_]{1,40}", str(k)):
+            continue
+        o = {}
+        if isinstance(c.get("label"), str) and c["label"].strip():
+            o["label"] = c["label"].strip()[:40]
+        for f in ("bg", "bg2", "fg"):
+            if isinstance(c.get(f), str) and HEX.match(c[f]):
+                o[f] = c[f]
+        for f, lo, hi in (("z", 40, 200), ("r", 0, 60), ("o", -100, 100)):
+            if c.get(f) is not None:
+                try:
+                    o[f] = max(lo, min(hi, int(c[f])))
+                except (TypeError, ValueError):
+                    pass
+        if c.get("hide") is True:
+            o["hide"] = True
+        if o:
+            out[str(k)] = o
+    return out
+
+
 def admin_data():
     u = db.execute("SELECT COUNT(*) c,COALESCE(SUM(balance),0) b FROM users").fetchone()
     return {
@@ -282,6 +311,7 @@ def admin_data():
                         qty=x["qty"], cost=x["cost"], status=x["status"])
                    for x in db.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 20")],
         "ref": float(setting("ref", "20")),
+        "ui": json.loads(setting("ui", "{}")),
     }
 
 
@@ -326,6 +356,10 @@ async def api_admin(req):
             if o and o["status"] != "done":
                 db.execute("UPDATE orders SET status='done' WHERE id=?", (o["id"],))
                 tell(o["user_id"], f"✅ Buyurtmangiz bajarildi: {o['platform']} · {o['service']} × {o['qty']}")
+        elif act == "ui_save":
+            db.execute("INSERT OR REPLACE INTO settings VALUES('ui',?)", (json.dumps(clean_ui(b.get("ui"))),))
+        elif act == "ui_reset":
+            db.execute("DELETE FROM settings WHERE k='ui'")
         elif act == "post":
             txt = str(b.get("text", "")).strip()
             if not txt:
