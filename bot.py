@@ -1,9 +1,9 @@
-import re, os, json, time, hmac, hashlib, sqlite3, asyncio, logging
+import re, math, os, json, time, hmac, hashlib, sqlite3, asyncio, logging
 from urllib.parse import parse_qsl
 from aiohttp import web
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, CommandObject
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, MenuButtonWebApp
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, MenuButtonWebApp, LabeledPrice, PreCheckoutQuery
 
 TOKEN = os.environ["BOT_TOKEN"]
 ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
@@ -21,11 +21,46 @@ Vazifalar bajarib, do'stlaringizni taklif qilib pul yig'ing va istaganingizga eg
 
 Kanalimiz : @poletgram"""
 
+# [nom, 100 ta uchun narx ($), tavsif, minimal miqdor, ikonka, tez kunda(1/0)]
 SERVICES = {
-    "Instagram": [["Prasmotr", 0.05], ["Like", 0.10], ["Share", 0.15]],
-    "Telegram": [["Prasmotr", 0.04], ["Reaksiya", 0.08]],
-    "TikTok": [["Prasmotr", 0.05], ["Like", 0.12], ["Video rivoj", 0.30]],
+    "Instagram": [
+        ["Video Prasmotr", 0.05, "Instagram video va reellar uchun", 500, "play", 0],
+        ["Video Share (Ulashish)", 0.15, "Video va reellarni ulashish", 10, "share", 0],
+        ["Postga Like", 0.10, "Post va reellar uchun likelar", 10, "heart", 0],
+        ["Profilga Obunachi", 0.30, "Profilingiz obunachilarini oshirish", 10, "user", 1],
+    ],
+    "Telegram": [
+        ["Post Prasmotr", 0.04, "Telegram post va videolar uchun", 100, "play", 0],
+        ["Post Reaksiya", 0.08, "Postlarga reaksiya", 10, "heart", 0],
+        ["Kanalga Obunachi", 0.30, "Kanal obunachilarini oshirish", 10, "user", 1],
+    ],
+    "TikTok": [
+        ["Video Prasmotr", 0.05, "TikTok videolar uchun", 500, "play", 0],
+        ["Videoga Like", 0.12, "TikTok videolar uchun likelar", 10, "heart", 0],
+        ["Video Rivoj", 0.30, "Videoni trendga chiqarish", 100, "share", 0],
+        ["Profilga Obunachi", 0.35, "Profilingiz obunachilarini oshirish", 10, "user", 1],
+    ],
 }
+# Balans to'ldirish paketlari. 1000 $ = 20 000 so'm. Stars narxi: so'm / SOM_PER_STAR
+# (Telegram'da 1 Star ≈ $0.02 ≈ 250 so'm). Kerak bo'lsa SOM_PER_STAR muhit o'zgaruvchisi bilan o'zgartiring.
+SOM_PER_STAR = float(os.environ.get("SOM_PER_STAR", 250))
+PACKAGES = [
+    {"amount": 500, "bonus": 0, "tag": "std"},
+    {"amount": 1000, "bonus": 100, "tag": "bonus"},
+    {"amount": 2000, "bonus": 500, "tag": "bonus"},
+    {"amount": 4000, "bonus": 1500, "tag": "hot"},
+    {"amount": 8000, "bonus": 8000, "tag": "vip"},
+]
+
+
+def stars_of(p):
+    return max(1, math.ceil(p["amount"] * 20 / SOM_PER_STAR))
+
+
+def pkg_list():
+    return [dict(p, total=p["amount"] + p["bonus"], stars=stars_of(p), som=p["amount"] * 20) for p in PACKAGES]
+
+
 TYPES = {"link", "youtube", "ad", "bot", "bonus"}
 
 bot = Bot(TOKEN)
@@ -41,6 +76,7 @@ CREATE TABLE IF NOT EXISTS promos(code TEXT PRIMARY KEY,amount REAL,uses INTEGER
 CREATE TABLE IF NOT EXISTS promo_used(user_id INTEGER,code TEXT,PRIMARY KEY(user_id,code));
 CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER,platform TEXT,service TEXT,link TEXT,qty INTEGER,cost REAL,ts INTEGER);
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT);
+CREATE TABLE IF NOT EXISTS payments(charge_id TEXT PRIMARY KEY,user_id INTEGER,stars INTEGER,amount REAL,ts INTEGER);
 """)
 try:
     db.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'new'")
@@ -164,7 +200,7 @@ async def api_init(req):
     ts = [{"id": t["id"], "type": t["type"], "title": t["title"], "sub": t["sub"], "reward": t["reward"],
            "done": t["id"] in done} for t in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")]
     return jr({"me": me(uid), "tasks": ts, "svc": SERVICES, "ref": float(setting("ref", "20")),
-                "admin": uid in ADMINS, "ui": json.loads(setting("ui", "{}"))})
+                "admin": uid in ADMINS, "pkgs": pkg_list(), "ui": json.loads(setting("ui", "{}"))})
 
 
 @routes.post("/api/task/start")
@@ -203,14 +239,17 @@ async def api_order(req):
     uid = need(req)
     b = await body(req)
     try:
-        price = dict(SERVICES[b["platform"]])[b["service"]]
+        it = next(x for x in SERVICES[b["platform"]] if x[0] == b["service"])
         qty = int(b["qty"])
     except Exception:
         return jr({"error": "Noto'g'ri so'rov"}, 400)
+    if it[5]:
+        return jr({"error": "Bu xizmat tez kunda ishga tushadi"}, 400)
+    price = it[1]
     link = str(b.get("link", "")).strip()[:300]
-    if qty < 100 or qty > 1000000 or not link:
-        return jr({"error": "Havola va miqdorni to'g'ri kiriting"}, 400)
-    cost = round(qty / 100 * price, 2)
+    if qty < it[3] or qty > 1000000 or not link:
+        return jr({"error": f"Havolani kiriting. Minimal miqdor: {it[3]}"}, 400)
+    cost = max(0.01, round(qty / 100 * price, 2))
     if db.execute("UPDATE users SET balance=balance-? WHERE id=? AND balance>=?", (cost, uid, cost)).rowcount == 0:
         return jr({"error": "Balans yetarli emas"}, 400)
     db.execute("INSERT INTO orders(user_id,platform,service,link,qty,cost,ts) VALUES(?,?,?,?,?,?,?)",
@@ -373,6 +412,27 @@ async def api_admin(req):
     return jr({"data": admin_data()})
 
 
+@routes.post("/api/topup")
+async def api_topup(req):
+    uid = need(req)
+    try:
+        i = int((await body(req))["pkg"])
+        p = PACKAGES[i]
+    except Exception:
+        return jr({"error": "Noto'g'ri paket"}, 400)
+    stars = stars_of(p)
+    try:
+        url = await bot.create_invoice_link(
+            title=f"{p['amount']:,} $ balans",
+            description=f"Poletgram balansini to'ldirish: {p['amount'] + p['bonus']:,} $ ({stars} Stars)",
+            payload=f"pkg:{i}:{uid}", provider_token="", currency="XTR",
+            prices=[LabeledPrice(label=f"{p['amount']:,} $", amount=stars)])
+    except Exception:
+        logging.exception("invoice")
+        return jr({"error": "To'lovni yaratib bo'lmadi"}, 500)
+    return jr({"url": url})
+
+
 async def health(req):
     return web.Response(text="ok")
 
@@ -509,6 +569,35 @@ async def cmd_post(m: Message, command: CommandObject):
             pass
         await asyncio.sleep(0.05)
     await m.answer(f"✅ {ok} ta foydalanuvchiga yuborildi")
+
+
+@dp.pre_checkout_query()
+async def pre_checkout(q: PreCheckoutQuery):
+    await q.answer(ok=True)
+
+
+@dp.message(F.successful_payment)
+async def paid(m: Message):
+    sp = m.successful_payment
+    try:
+        _, i, uid = sp.invoice_payload.split(":")
+        p = PACKAGES[int(i)]
+        ok = sp.currency == "XTR" and sp.total_amount == stars_of(p) and int(uid) == m.from_user.id
+    except Exception:
+        ok = False
+    if not ok:
+        await notify_admins(f"⚠️ Shubhali to'lov: {sp.invoice_payload} · {sp.total_amount} {sp.currency} · {m.from_user.id}")
+        return
+    total = p["amount"] + p["bonus"]
+    try:
+        db.execute("INSERT INTO payments VALUES(?,?,?,?,?)",
+                   (sp.telegram_payment_charge_id, m.from_user.id, sp.total_amount, total, int(time.time())))
+    except sqlite3.IntegrityError:
+        return
+    db.execute("UPDATE users SET balance=balance+? WHERE id=?", (total, m.from_user.id))
+    db.commit()
+    await m.answer(f"✅ To'lov qabul qilindi! Balansingizga +{total:,} $ qo'shildi.")
+    await notify_admins(f"💳 To'lov: {m.from_user.full_name} (ID {m.from_user.id}) · {sp.total_amount} ⭐ → {total:,} $")
 
 
 async def main():
