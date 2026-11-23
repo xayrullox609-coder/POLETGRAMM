@@ -1,4 +1,4 @@
-import re, math, os, json, time, hmac, hashlib, sqlite3, asyncio, logging
+import re, math, base64, os, json, time, hmac, hashlib, sqlite3, asyncio, logging
 from urllib.parse import parse_qsl
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
@@ -200,7 +200,8 @@ async def api_init(req):
     ts = [{"id": t["id"], "type": t["type"], "title": t["title"], "sub": t["sub"], "reward": t["reward"],
            "done": t["id"] in done} for t in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")]
     return jr({"me": me(uid), "tasks": ts, "svc": SERVICES, "ref": float(setting("ref", "20")),
-                "admin": uid in ADMINS, "pkgs": pkg_list(), "ui": json.loads(setting("ui", "{}"))})
+                "admin": uid in ADMINS, "pkgs": pkg_list(), "ui": json.loads(setting("ui", "{}")),
+                "bgv": setting("bg_ver", ""), "theme": json.loads(setting("theme", "{}"))})
 
 
 @routes.post("/api/task/start")
@@ -339,6 +340,15 @@ def clean_ui(raw):
     return out
 
 
+THEME_KEYS = {"a1", "a2", "a3", "s1", "s2", "s3", "s4", "b1", "b2", "sh", "tx", "tx2", "tx3", "ni", "pbg", "hd", "on", "on2"}
+
+
+def clean_theme(raw):
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if k in THEME_KEYS and isinstance(v, str) and HEX.match(v)}
+
+
 def admin_data():
     u = db.execute("SELECT COUNT(*) c,COALESCE(SUM(balance),0) b FROM users").fetchone()
     return {
@@ -351,6 +361,7 @@ def admin_data():
                    for x in db.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 20")],
         "ref": float(setting("ref", "20")),
         "ui": json.loads(setting("ui", "{}")),
+        "bgv": setting("bg_ver", ""),
     }
 
 
@@ -399,6 +410,18 @@ async def api_admin(req):
             db.execute("INSERT OR REPLACE INTO settings VALUES('ui',?)", (json.dumps(clean_ui(b.get("ui"))),))
         elif act == "ui_reset":
             db.execute("DELETE FROM settings WHERE k='ui'")
+        elif act == "bg_save":
+            img = str(b.get("img", ""))
+            m = re.match(r"^data:(image/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$", img)
+            if not m or len(img) > 700000:
+                raise ValueError
+            if len(base64.b64decode(m.group(2), validate=True)) > 520000:
+                raise ValueError
+            for k, v in (("bg_img", m.group(2)), ("bg_mime", m.group(1)), ("bg_ver", str(int(time.time()))),
+                         ("theme", json.dumps(clean_theme(b.get("theme"))))):
+                db.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (k, v))
+        elif act == "bg_reset":
+            db.execute("DELETE FROM settings WHERE k IN ('bg_img','bg_mime','bg_ver','theme')")
         elif act == "post":
             txt = str(b.get("text", "")).strip()
             if not txt:
@@ -431,6 +454,14 @@ async def api_topup(req):
         logging.exception("invoice")
         return jr({"error": "To'lovni yaratib bo'lmadi"}, 500)
     return jr({"url": url})
+
+
+async def bg_img(req):
+    r = db.execute("SELECT v FROM settings WHERE k='bg_img'").fetchone()
+    if not r:
+        return web.Response(status=404)
+    return web.Response(body=base64.b64decode(r["v"]), content_type=setting("bg_mime", "image/jpeg"),
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 async def health(req):
@@ -602,10 +633,11 @@ async def paid(m: Message):
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    app = web.Application()
+    app = web.Application(client_max_size=2 * 1024 * 1024)
     app.add_routes(routes)
     app.router.add_get("/", index)
     app.router.add_get("/health", health)
+    app.router.add_get("/bg", bg_img)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, "0.0.0.0", PORT).start()
