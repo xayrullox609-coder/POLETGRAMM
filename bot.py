@@ -20,6 +20,7 @@ if not URL:
 PORT = int(os.environ.get("PORT", 8080))
 DB = os.environ.get("DB_PATH", "poletgram.db")
 HERE = os.path.dirname(os.path.abspath(__file__))
+TZ_OFFSET = float(os.environ.get("TZ_OFFSET_HOURS", 5))  # vaqt mintaqasi (O'zbekiston UTC+5)
 MIN_WAIT = 10  # vazifani tekshirishdan oldin kutish (soniya)
 
 START_TEXT = """🌐 Instagram va Telegram sahifalaringizni tekinga rivojlantiring ❤️‍🔥
@@ -74,7 +75,9 @@ bot = Bot(TOKEN)
 dp = Dispatcher()
 PG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(id BIGINT PRIMARY KEY,username TEXT,name TEXT,balance DOUBLE PRECISION DEFAULT 0,ref_by BIGINT,ref_paid INTEGER DEFAULT 0,created BIGINT);
-CREATE TABLE IF NOT EXISTS tasks(id BIGSERIAL PRIMARY KEY,type TEXT,title TEXT,sub TEXT,url TEXT,reward DOUBLE PRECISION,active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS tasks(id BIGSERIAL PRIMARY KEY,type TEXT,title TEXT,sub TEXT,url TEXT,reward DOUBLE PRECISION,active INTEGER DEFAULT 1,daily INTEGER DEFAULT 0);
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS daily INTEGER DEFAULT 0;
+CREATE TABLE IF NOT EXISTS tlog(user_id BIGINT,task_id BIGINT,dayn BIGINT,n INTEGER,PRIMARY KEY(user_id,task_id,dayn));
 CREATE TABLE IF NOT EXISTS done(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS started(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS promos(code TEXT PRIMARY KEY,amount DOUBLE PRECISION,uses INTEGER);
@@ -198,7 +201,8 @@ else:
     db.row_factory = sqlite3.Row
     db.executescript("""
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT,name TEXT,balance REAL DEFAULT 0,ref_by INTEGER,ref_paid INTEGER DEFAULT 0,created INTEGER);
-CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,title TEXT,sub TEXT,url TEXT,reward REAL,active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,title TEXT,sub TEXT,url TEXT,reward REAL,active INTEGER DEFAULT 1,daily INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS tlog(user_id INTEGER,task_id INTEGER,dayn INTEGER,n INTEGER,PRIMARY KEY(user_id,task_id,dayn));
 CREATE TABLE IF NOT EXISTS done(user_id INTEGER,task_id INTEGER,ts INTEGER,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS started(user_id INTEGER,task_id INTEGER,ts INTEGER,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS promos(code TEXT PRIMARY KEY,amount REAL,uses INTEGER);
@@ -209,6 +213,11 @@ CREATE TABLE IF NOT EXISTS payments(charge_id TEXT PRIMARY KEY,user_id INTEGER,s
 """)
     try:
         db.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'new'")
+        db.commit()
+    except sqlite3.OperationalError:
+        pass
+    try:
+        db.execute("ALTER TABLE tasks ADD COLUMN daily INTEGER DEFAULT 0")
         db.commit()
     except sqlite3.OperationalError:
         pass
@@ -294,6 +303,33 @@ def me(uid):
     return {"id": r["id"], "name": r["name"], "balance": round(r["balance"], 2), "refs": c["t"], "active": c["a"]}
 
 
+def local_now():
+    return time.time() + TZ_OFFSET * 3600
+
+
+def today():
+    return int(local_now() // 86400)
+
+
+def reset_in():
+    """Kun yangilanishigacha qolgan soniyalar (har kuni yarim tunda)."""
+    return int(86400 - local_now() % 86400)
+
+
+def task_count(uid, t):
+    r = db.execute("SELECT n FROM tlog WHERE user_id=? AND task_id=? AND dayn=?", (uid, t["id"], today())).fetchone()
+    return r["n"] if r else 0
+
+
+def task_blocked(uid, t):
+    if t["daily"]:
+        if task_count(uid, t) >= t["daily"]:
+            return "Bugungi limit tugadi. Ertaga qayta urinib ko'ring"
+    elif db.execute("SELECT 1 FROM done WHERE user_id=? AND task_id=?", (uid, t["id"])).fetchone():
+        return "Bu vazifa allaqachon bajarilgan"
+    return None
+
+
 def get_task(i):
     return db.execute("SELECT * FROM tasks WHERE id=? AND active=1", (i,)).fetchone()
 
@@ -327,10 +363,13 @@ routes = web.RouteTableDef()
 async def api_init(req):
     uid = need(req)
     done = {r[0] for r in db.execute("SELECT task_id FROM done WHERE user_id=?", (uid,))}
+    cnt = {r[0]: r[1] for r in db.execute("SELECT task_id,n FROM tlog WHERE user_id=? AND dayn=?", (uid, today()))}
     ts = [{"id": t["id"], "type": t["type"], "title": t["title"], "sub": t["sub"], "reward": t["reward"],
-           "done": t["id"] in done} for t in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")]
+           "daily": t["daily"] or 0, "cnt": cnt.get(t["id"], 0),
+           "done": (cnt.get(t["id"], 0) >= t["daily"]) if t["daily"] else (t["id"] in done)}
+          for t in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")]
     return jr({"me": me(uid), "tasks": ts, "svc": SERVICES, "ref": float(setting("ref", "20")),
-                "admin": uid in ADMINS, "pkgs": pkg_list(), "ui": json.loads(setting("ui", "{}")),
+                "reset_in": reset_in(), "admin": uid in ADMINS, "pkgs": pkg_list(), "ui": json.loads(setting("ui", "{}")),
                 "bgv": setting("bg_ver", ""), "theme": json.loads(setting("theme", "{}"))})
 
 
@@ -340,6 +379,9 @@ async def api_start(req):
     t = get_task((await body(req)).get("id"))
     if not t:
         return jr({"error": "Vazifa topilmadi"}, 404)
+    err = task_blocked(uid, t)
+    if err:
+        return jr({"error": err}, 400)
     db.execute("INSERT OR IGNORE INTO started VALUES(?,?,?)", (uid, t["id"], int(time.time())))
     db.commit()
     return jr({"url": t["url"]})
@@ -351,14 +393,27 @@ async def api_claim(req):
     t = get_task((await body(req)).get("id"))
     if not t:
         return jr({"error": "Vazifa topilmadi"}, 404)
+    err = task_blocked(uid, t)
+    if err:
+        return jr({"error": err}, 400)
     if t["type"] != "bonus":
         s = db.execute("SELECT ts FROM started WHERE user_id=? AND task_id=?", (uid, t["id"])).fetchone()
         if not s or time.time() - s["ts"] < MIN_WAIT:
             return jr({"error": "Avval vazifani bajaring (kamida 10 soniya)"}, 400)
-    try:
-        db.execute("INSERT INTO done VALUES(?,?,?)", (uid, t["id"], int(time.time())))
-    except IntegrityErr:
-        return jr({"error": "Bu vazifa allaqachon bajarilgan"}, 400)
+    err = task_blocked(uid, t)
+    if err:
+        return jr({"error": err}, 400)
+    if t["daily"]:
+        if task_count(uid, t):
+            db.execute("UPDATE tlog SET n=n+1 WHERE user_id=? AND task_id=? AND dayn=?", (uid, t["id"], today()))
+        else:
+            db.execute("INSERT INTO tlog VALUES(?,?,?,1)", (uid, t["id"], today()))
+    else:
+        try:
+            db.execute("INSERT INTO done VALUES(?,?,?)", (uid, t["id"], int(time.time())))
+        except IntegrityErr:
+            return jr({"error": "Bu vazifa allaqachon bajarilgan"}, 400)
+    db.execute("DELETE FROM started WHERE user_id=? AND task_id=?", (uid, t["id"]))
     db.execute("UPDATE users SET balance=balance+? WHERE id=?", (t["reward"], uid))
     db.commit()
     await pay_ref(uid)
@@ -483,7 +538,7 @@ def admin_data():
     u = db.execute("SELECT COUNT(*) c,COALESCE(SUM(balance),0) b FROM users").fetchone()
     return {
         "stats": {"users": u["c"], "bal": round(u["b"], 2), "orders": db.execute("SELECT COUNT(*) FROM orders").fetchone()[0]},
-        "tasks": [dict(id=x["id"], type=x["type"], title=x["title"], sub=x["sub"], url=x["url"], reward=x["reward"])
+        "tasks": [dict(id=x["id"], type=x["type"], title=x["title"], sub=x["sub"], url=x["url"], reward=x["reward"], daily=x["daily"] or 0)
                   for x in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")],
         "promos": [dict(code=x["code"], amount=x["amount"], uses=x["uses"]) for x in db.execute("SELECT * FROM promos")],
         "orders": [dict(id=x["id"], user=x["user_id"], platform=x["platform"], service=x["service"], link=x["link"],
@@ -515,8 +570,10 @@ async def api_admin(req):
             typ = str(b.get("type"))
             if typ not in TYPES or not str(b.get("title", "")).strip():
                 raise ValueError
-            db.execute("INSERT INTO tasks(type,title,sub,url,reward) VALUES(?,?,?,?,?)",
-                       (typ, str(b["title"]).strip()[:100], str(b.get("sub", ""))[:150], str(b.get("url", "")).strip()[:300], float(b["reward"])))
+            daily = max(0, min(1000, int(b.get("daily") or 0)))
+            db.execute("INSERT INTO tasks(type,title,sub,url,reward,daily) VALUES(?,?,?,?,?,?)",
+                       (typ, str(b["title"]).strip()[:100], str(b.get("sub", ""))[:150], str(b.get("url", "")).strip()[:300],
+                        float(b["reward"]), daily))
         elif act == "task_del":
             db.execute("UPDATE tasks SET active=0 WHERE id=?", (int(b["id"]),))
         elif act == "promo_add":
@@ -645,10 +702,11 @@ async def cmd_addtask(m: Message, command: CommandObject):
     p = [x.strip() for x in (command.args or "").split("|")]
     try:
         typ, title, sub, url, rew = p[0].lower(), p[1], p[2], p[3], float(p[4])
+        daily = int(p[5]) if len(p) > 5 and p[5] else 0
         assert typ in TYPES and title
     except Exception:
         return await m.answer("Format: /addtask tur | sarlavha | tavsif | havola | mukofot\nTurlar: link, youtube, ad, bot, bonus")
-    cur = db.execute("INSERT INTO tasks(type,title,sub,url,reward) VALUES(?,?,?,?,?)", (typ, title, sub, url, rew))
+    cur = db.execute("INSERT INTO tasks(type,title,sub,url,reward,daily) VALUES(?,?,?,?,?,?)", (typ, title, sub, url, rew, daily))
     db.commit()
     await m.answer(f"✅ Vazifa qo'shildi. ID: {cur.lastrowid}")
 
