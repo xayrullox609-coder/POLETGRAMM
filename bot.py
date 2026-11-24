@@ -5,6 +5,13 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, CommandObject
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, MenuButtonWebApp, LabeledPrice, PreCheckoutQuery
 
+try:
+    import psycopg2
+except ImportError:  # DATABASE_URL bo'lmasa kerak emas
+    psycopg2 = None
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+IntegrityErr = (sqlite3.IntegrityError,) + ((psycopg2.IntegrityError,) if psycopg2 else ())
 TOKEN = os.environ["BOT_TOKEN"]
 ADMINS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip()}
 URL = (os.environ.get("WEBAPP_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").rstrip("/")
@@ -65,9 +72,131 @@ TYPES = {"link", "youtube", "ad", "bot", "bonus"}
 
 bot = Bot(TOKEN)
 dp = Dispatcher()
-db = sqlite3.connect(DB, check_same_thread=False)
-db.row_factory = sqlite3.Row
-db.executescript("""
+PG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users(id BIGINT PRIMARY KEY,username TEXT,name TEXT,balance DOUBLE PRECISION DEFAULT 0,ref_by BIGINT,ref_paid INTEGER DEFAULT 0,created BIGINT);
+CREATE TABLE IF NOT EXISTS tasks(id BIGSERIAL PRIMARY KEY,type TEXT,title TEXT,sub TEXT,url TEXT,reward DOUBLE PRECISION,active INTEGER DEFAULT 1);
+CREATE TABLE IF NOT EXISTS done(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
+CREATE TABLE IF NOT EXISTS started(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
+CREATE TABLE IF NOT EXISTS promos(code TEXT PRIMARY KEY,amount DOUBLE PRECISION,uses INTEGER);
+CREATE TABLE IF NOT EXISTS promo_used(user_id BIGINT,code TEXT,PRIMARY KEY(user_id,code));
+CREATE TABLE IF NOT EXISTS orders(id BIGSERIAL PRIMARY KEY,user_id BIGINT,platform TEXT,service TEXT,link TEXT,qty BIGINT,cost DOUBLE PRECISION,ts BIGINT,status TEXT DEFAULT 'new');
+CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT);
+CREATE TABLE IF NOT EXISTS payments(charge_id TEXT PRIMARY KEY,user_id BIGINT,stars INTEGER,amount DOUBLE PRECISION,ts BIGINT);
+CREATE INDEX IF NOT EXISTS users_ref ON users(ref_by);
+CREATE INDEX IF NOT EXISTS users_uname ON users(lower(username));
+"""
+
+UPSERT = {"settings": ("k", ["v"]), "promos": ("code", ["amount", "uses"])}
+
+
+class Row(dict):
+    """Ham nom (r["x"]), ham indeks (r[0]) bilan ishlaydi."""
+
+    def __init__(self, names, vals):
+        super().__init__(zip(names, vals))
+        self._v = tuple(vals)
+
+    def __getitem__(self, k):
+        return self._v[k] if isinstance(k, int) else dict.__getitem__(self, k)
+
+
+class Cur:
+    def __init__(self, cur):
+        self.rowcount = cur.rowcount
+        self.lastrowid = None
+        self._rows = []
+        if cur.description:
+            names = [d[0] for d in cur.description]
+            self._rows = [Row(names, r) for r in cur.fetchall()]
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class PG:
+    """sqlite3 ga o'xshash interfeys: Postgres (Neon) uchun."""
+
+    def __init__(self, url):
+        self.url = url
+        self.conn = None
+        self.dirty = False
+        self._connect()
+
+    def _connect(self):
+        self.conn = psycopg2.connect(self.url, connect_timeout=15, keepalives=1,
+                                     keepalives_idle=30, keepalives_interval=10, keepalives_count=3)
+        self.dirty = False
+
+    @staticmethod
+    def _tr(sql):
+        s = sql.strip()
+        m = re.match(r"INSERT OR REPLACE INTO (\w+)", s)
+        if m:
+            pk, cols = UPSERT[m.group(1)]
+            s = "INSERT INTO" + s[len("INSERT OR REPLACE INTO"):] + f" ON CONFLICT ({pk}) DO UPDATE SET " + \
+                ",".join(f"{c}=EXCLUDED.{c}" for c in cols)
+        elif s.startswith("INSERT OR IGNORE INTO"):
+            s = "INSERT INTO" + s[len("INSERT OR IGNORE INTO"):] + " ON CONFLICT DO NOTHING"
+        elif re.match(r"INSERT INTO (tasks|orders)\b", s):
+            s += " RETURNING id"
+        return s.replace("?", "%s")
+
+    def execute(self, sql, params=()):
+        q = self._tr(sql)
+        write = not q.upper().startswith("SELECT")
+        for attempt in (0, 1):
+            cur = None
+            try:
+                cur = self.conn.cursor()
+                cur.execute(q, tuple(params))
+                break
+            except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                if attempt:
+                    raise
+                logging.warning("DB aloqasi uzildi, qayta ulanyapman")
+                try:
+                    self.conn.close()
+                except Exception:
+                    pass
+                self._connect()
+            except Exception:
+                self.conn.rollback()
+                self.dirty = False
+                raise
+        res = Cur(cur)
+        cur.close()
+        if q.endswith("RETURNING id") and res._rows:
+            res.lastrowid = res._rows[0][0]
+        if write:
+            self.dirty = True
+        elif not self.dirty:
+            self.conn.commit()
+        return res
+
+    def commit(self):
+        self.conn.commit()
+        self.dirty = False
+
+
+if DATABASE_URL:
+    if psycopg2 is None:
+        raise SystemExit("psycopg2-binary o'rnatilmagan: requirements.txt ni yangilang")
+    db = PG(DATABASE_URL)
+    _c = db.conn.cursor()
+    _c.execute(PG_SCHEMA)
+    db.conn.commit()
+    _c.close()
+    print("Baza: Postgres (DATABASE_URL)")
+else:
+    db = sqlite3.connect(DB, check_same_thread=False)
+    db.row_factory = sqlite3.Row
+    db.executescript("""
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT,name TEXT,balance REAL DEFAULT 0,ref_by INTEGER,ref_paid INTEGER DEFAULT 0,created INTEGER);
 CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,title TEXT,sub TEXT,url TEXT,reward REAL,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS done(user_id INTEGER,task_id INTEGER,ts INTEGER,PRIMARY KEY(user_id,task_id));
@@ -78,11 +207,12 @@ CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT,user_id I
 CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY,v TEXT);
 CREATE TABLE IF NOT EXISTS payments(charge_id TEXT PRIMARY KEY,user_id INTEGER,stars INTEGER,amount REAL,ts INTEGER);
 """)
-try:
-    db.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'new'")
-    db.commit()
-except sqlite3.OperationalError:
-    pass
+    try:
+        db.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'new'")
+        db.commit()
+    except sqlite3.OperationalError:
+        pass
+    print("Baza: SQLite (" + DB + ")")
 
 
 def setting(k, d):
@@ -227,7 +357,7 @@ async def api_claim(req):
             return jr({"error": "Avval vazifani bajaring (kamida 10 soniya)"}, 400)
     try:
         db.execute("INSERT INTO done VALUES(?,?,?)", (uid, t["id"], int(time.time())))
-    except sqlite3.IntegrityError:
+    except IntegrityErr:
         return jr({"error": "Bu vazifa allaqachon bajarilgan"}, 400)
     db.execute("UPDATE users SET balance=balance+? WHERE id=?", (t["reward"], uid))
     db.commit()
@@ -295,7 +425,7 @@ async def api_promo(req):
         return jr({"error": "Promokod noto'g'ri yoki tugagan"}, 400)
     try:
         db.execute("INSERT INTO promo_used VALUES(?,?)", (uid, code))
-    except sqlite3.IntegrityError:
+    except IntegrityErr:
         return jr({"error": "Bu promokodni ishlatgansiz"}, 400)
     db.execute("UPDATE promos SET uses=uses-1 WHERE code=?", (code,))
     db.execute("UPDATE users SET balance=balance+? WHERE id=?", (p["amount"], uid))
@@ -623,7 +753,7 @@ async def paid(m: Message):
     try:
         db.execute("INSERT INTO payments VALUES(?,?,?,?,?)",
                    (sp.telegram_payment_charge_id, m.from_user.id, sp.total_amount, total, int(time.time())))
-    except sqlite3.IntegrityError:
+    except IntegrityErr:
         return
     db.execute("UPDATE users SET balance=balance+? WHERE id=?", (total, m.from_user.id))
     db.commit()
