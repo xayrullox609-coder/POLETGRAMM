@@ -29,24 +29,25 @@ Vazifalar bajarib, do'stlaringizni taklif qilib pul yig'ing va istaganingizga eg
 
 Kanalimiz : @poletgram"""
 
-# [nom, 100 ta uchun narx ($), tavsif, minimal miqdor, ikonka, tez kunda(1/0)]
+# [nom, narx ($), tavsif, minimal miqdor, ikonka, tez kunda(1/0), narx necha dona uchun]
+# Misol: ["Video Prasmotr", 2, ..., 500, "play", 0, 500]  ->  500 ta ko'rish = 2 $
 SERVICES = {
     "Instagram": [
-        ["Video Prasmotr", 0.05, "Instagram video va reellar uchun", 500, "play", 0],
-        ["Video Share (Ulashish)", 0.15, "Video va reellarni ulashish", 10, "share", 0],
-        ["Postga Like", 0.10, "Post va reellar uchun likelar", 10, "heart", 0],
-        ["Profilga Obunachi", 0.30, "Profilingiz obunachilarini oshirish", 10, "user", 1],
+        ["Video Prasmotr", 2, "Instagram video va reellar uchun", 500, "play", 0, 500],
+        ["Video Share (Ulashish)", 2, "Video va reellarni ulashish", 10, "share", 1, 10],
+        ["Postga Like", 2, "Post va reellar uchun likelar", 10, "heart", 0, 10],
+        ["Profilga Obunachi", 10, "Profilingiz obunachilarini oshirish", 10, "user", 1, 10],
     ],
     "Telegram": [
-        ["Post Prasmotr", 0.04, "Telegram post va videolar uchun", 100, "play", 0],
-        ["Post Reaksiya", 0.08, "Postlarga reaksiya", 10, "heart", 0],
-        ["Kanalga Obunachi", 0.30, "Kanal obunachilarini oshirish", 10, "user", 1],
+        ["Post Prasmotr", 1, "Telegram post va videolar uchun", 100, "play", 0, 100],
+        ["Post Reaksiya", 1.5, "Postlarga reaksiya", 50, "heart", 0, 50],
+        ["Kanalga Obunachi", 150, "Kanal obunachilarini oshirish", 100, "user", 1, 100],
     ],
     "TikTok": [
-        ["Video Prasmotr", 0.05, "TikTok videolar uchun", 500, "play", 0],
-        ["Videoga Like", 0.12, "TikTok videolar uchun likelar", 10, "heart", 0],
-        ["Video Rivoj", 0.30, "Videoni trendga chiqarish", 100, "share", 0],
-        ["Profilga Obunachi", 0.35, "Profilingiz obunachilarini oshirish", 10, "user", 1],
+        ["Videoga Like", 2, "TikTok videolar uchun likelar", 10, "heart", 0, 10],
+        ["Videoni Saqlash", 2, "TikTok videolarni saqlash", 100, "save", 0, 100],
+        ["Video Prasmotr", 2, "TikTok videolar uchun", 500, "play", 1, 500],
+        ["Profilga Obunachi", 10, "Profilingiz obunachilarini oshirish", 10, "user", 1, 10],
     ],
 }
 # Balans to'ldirish paketlari. 1000 $ = 20 000 so'm. Stars narxi: so'm / SOM_PER_STAR
@@ -123,7 +124,8 @@ class Cur:
 
 
 class PG:
-    """sqlite3 ga o'xshash interfeys: Postgres (Neon) uchun."""
+    """sqlite3 ga o'xshash interfeys: Postgres (Neon) uchun.
+    Autocommit rejimi: o'qish 1 ta so'rov, yozish BEGIN ... COMMIT bilan (atomik)."""
 
     def __init__(self, url):
         self.url = url
@@ -134,6 +136,7 @@ class PG:
     def _connect(self):
         self.conn = psycopg2.connect(self.url, connect_timeout=15, keepalives=1,
                                      keepalives_idle=30, keepalives_interval=10, keepalives_count=3)
+        self.conn.autocommit = True
         self.dirty = False
 
     @staticmethod
@@ -150,17 +153,24 @@ class PG:
             s += " RETURNING id"
         return s.replace("?", "%s")
 
+    def _simple(self, sql):
+        c = self.conn.cursor()
+        c.execute(sql)
+        c.close()
+
     def execute(self, sql, params=()):
         q = self._tr(sql)
         write = not q.upper().startswith("SELECT")
         for attempt in (0, 1):
+            run = ("BEGIN; " + q) if (write and not self.dirty) else q
             cur = None
             try:
                 cur = self.conn.cursor()
-                cur.execute(q, tuple(params))
+                cur.execute(run, tuple(params))
                 break
             except (psycopg2.OperationalError, psycopg2.InterfaceError):
-                if attempt:
+                if attempt or self.dirty:
+                    self.dirty = False
                     raise
                 logging.warning("DB aloqasi uzildi, qayta ulanyapman")
                 try:
@@ -169,7 +179,10 @@ class PG:
                     pass
                 self._connect()
             except Exception:
-                self.conn.rollback()
+                try:
+                    self._simple("ROLLBACK")
+                except Exception:
+                    pass
                 self.dirty = False
                 raise
         res = Cur(cur)
@@ -178,22 +191,27 @@ class PG:
             res.lastrowid = res._rows[0][0]
         if write:
             self.dirty = True
-        elif not self.dirty:
-            self.conn.commit()
         return res
 
     def commit(self):
-        self.conn.commit()
-        self.dirty = False
+        if self.dirty:
+            self.dirty = False
+            self._simple("COMMIT")
 
+    def rollback(self):
+        if self.dirty:
+            self.dirty = False
+            try:
+                self._simple("ROLLBACK")
+            except Exception:
+                pass
 
 if DATABASE_URL:
     if psycopg2 is None:
         raise SystemExit("psycopg2-binary o'rnatilmagan: requirements.txt ni yangilang")
     db = PG(DATABASE_URL)
     _c = db.conn.cursor()
-    _c.execute(PG_SCHEMA)
-    db.conn.commit()
+    _c.execute(PG_SCHEMA)  # autocommit rejimi: darrov bajariladi
     _c.close()
     print("Baza: Postgres (DATABASE_URL)")
 else:
@@ -224,24 +242,36 @@ CREATE TABLE IF NOT EXISTS payments(charge_id TEXT PRIMARY KEY,user_id INTEGER,s
     print("Baza: SQLite (" + DB + ")")
 
 
+SETC = {}
+
+
+def reload_settings():
+    SETC.clear()
+    for r in db.execute("SELECT k,v FROM settings WHERE k<>'bg_img'").fetchall():
+        SETC[r["k"]] = r["v"]
+
+
 def setting(k, d):
-    r = db.execute("SELECT v FROM settings WHERE k=?", (k,)).fetchone()
-    return r["v"] if r else d
+    return SETC.get(k, d)
+
+
+reload_settings()
 
 
 def touch(u, ref=None):
     name = "@" + u["username"] if u.get("username") else (u.get("first_name") or "User")
-    r = db.execute("SELECT id FROM users WHERE id=?", (u["id"],)).fetchone()
+    r = db.execute("SELECT username,name FROM users WHERE id=?", (u["id"],)).fetchone()
     new = None
     if r is None:
         if ref == u["id"] or not db.execute("SELECT 1 FROM users WHERE id=?", (ref,)).fetchone():
             ref = None
         db.execute("INSERT INTO users(id,username,name,balance,ref_by,created) VALUES(?,?,?,0,?,?)",
                    (u["id"], u.get("username"), name, ref, int(time.time())))
+        db.commit()
         new = ref
-    else:
+    elif r["username"] != u.get("username") or r["name"] != name:
         db.execute("UPDATE users SET username=?,name=? WHERE id=?", (u.get("username"), name, u["id"]))
-    db.commit()
+        db.commit()
     return new
 
 
@@ -298,9 +328,10 @@ async def body(req):
 
 
 def me(uid):
-    r = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
-    c = db.execute("SELECT COUNT(*) t,COALESCE(SUM(ref_paid),0) a FROM users WHERE ref_by=?", (uid,)).fetchone()
-    return {"id": r["id"], "name": r["name"], "balance": round(r["balance"], 2), "refs": c["t"], "active": c["a"]}
+    r = db.execute("SELECT id,name,balance,(SELECT COUNT(*) FROM users WHERE ref_by=?) AS t,"
+                   "(SELECT COALESCE(SUM(ref_paid),0) FROM users WHERE ref_by=?) AS a FROM users WHERE id=?",
+                   (uid, uid, uid)).fetchone()
+    return {"id": r["id"], "name": r["name"], "balance": round(r["balance"], 2), "refs": r["t"], "active": r["a"]}
 
 
 def local_now():
@@ -435,7 +466,7 @@ async def api_order(req):
     link = str(b.get("link", "")).strip()[:300]
     if qty < it[3] or qty > 1000000 or not link:
         return jr({"error": f"Havolani kiriting. Minimal miqdor: {it[3]}"}, 400)
-    cost = max(0.01, round(qty / 100 * price, 2))
+    cost = max(0.01, round(qty / it[6] * price, 2))
     if db.execute("UPDATE users SET balance=balance-? WHERE id=? AND balance>=?", (cost, uid, cost)).rowcount == 0:
         return jr({"error": "Balans yetarli emas"}, 400)
     db.execute("INSERT INTO orders(user_id,platform,service,link,qty,cost,ts) VALUES(?,?,?,?,?,?,?)",
@@ -535,9 +566,10 @@ def clean_theme(raw):
 
 
 def admin_data():
-    u = db.execute("SELECT COUNT(*) c,COALESCE(SUM(balance),0) b FROM users").fetchone()
+    u = db.execute("SELECT (SELECT COUNT(*) FROM users) AS c,(SELECT COALESCE(SUM(balance),0) FROM users) AS b,"
+                    "(SELECT COUNT(*) FROM orders) AS o").fetchone()
     return {
-        "stats": {"users": u["c"], "bal": round(u["b"], 2), "orders": db.execute("SELECT COUNT(*) FROM orders").fetchone()[0]},
+        "stats": {"users": u["c"], "bal": round(u["b"], 2), "orders": u["o"]},
         "tasks": [dict(id=x["id"], type=x["type"], title=x["title"], sub=x["sub"], url=x["url"], reward=x["reward"], daily=x["daily"] or 0)
                   for x in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")],
         "promos": [dict(code=x["code"], amount=x["amount"], uses=x["uses"]) for x in db.execute("SELECT * FROM promos")],
@@ -566,6 +598,39 @@ async def api_admin(req):
     try:
         if act == "data":
             pass
+        elif act == "users":
+            q = str(b.get("q", "")).strip().lower()[:50]
+            off = max(0, int(b.get("off") or 0))
+            rows = db.execute("SELECT id,name,balance,created FROM users WHERE (?='' OR lower(name) LIKE ? OR CAST(id AS TEXT)=?) "
+                              "ORDER BY created DESC, id DESC LIMIT 31 OFFSET ?", (q, f"%{q}%", q, off)).fetchall()
+            return jr({"users": [{"id": r["id"], "name": r["name"], "balance": round(r["balance"], 2), "created": r["created"]}
+                                 for r in rows[:30]], "more": len(rows) > 30})
+        elif act == "user":
+            p = db.execute(
+                "SELECT u.*,(SELECT COUNT(*) FROM users WHERE ref_by=u.id) AS refs,"
+                "(SELECT COALESCE(SUM(ref_paid),0) FROM users WHERE ref_by=u.id) AS ractive,"
+                "(SELECT name FROM users WHERE id=u.ref_by) AS refname,"
+                "(SELECT COUNT(*) FROM done WHERE user_id=u.id) AS d1,"
+                "(SELECT COALESCE(SUM(n),0) FROM tlog WHERE user_id=u.id) AS d2,"
+                "(SELECT COUNT(*) FROM orders WHERE user_id=u.id) AS oc,"
+                "(SELECT COALESCE(SUM(cost),0) FROM orders WHERE user_id=u.id) AS ocost,"
+                "(SELECT COALESCE(SUM(stars),0) FROM payments WHERE user_id=u.id) AS stars,"
+                "(SELECT COALESCE(SUM(amount),0) FROM payments WHERE user_id=u.id) AS paid "
+                "FROM users u WHERE u.id=?", (int(b["id"]),)).fetchone()
+            if not p:
+                return jr({"error": "Foydalanuvchi topilmadi"}, 404)
+            od = db.execute("SELECT * FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 5", (p["id"],)).fetchall()
+            return jr({"user": {"id": p["id"], "name": p["name"], "username": p["username"], "balance": round(p["balance"], 2),
+                                "created": p["created"], "refs": p["refs"], "ractive": p["ractive"], "refname": p["refname"],
+                                "tasks": p["d1"] + p["d2"], "oc": p["oc"], "ocost": round(p["ocost"], 2),
+                                "stars": p["stars"], "paid": round(p["paid"], 2)},
+                       "orders": [{"id": o["id"], "platform": o["platform"], "service": o["service"], "qty": o["qty"],
+                                   "cost": o["cost"], "status": o["status"]} for o in od]})
+        elif act == "dm":
+            txt = str(b.get("text", "")).strip()
+            if not txt:
+                raise ValueError
+            tell(int(b["id"]), txt[:4000])
         elif act == "task_add":
             typ = str(b.get("type"))
             if typ not in TYPES or not str(b.get("title", "")).strip():
@@ -619,6 +684,8 @@ async def api_admin(req):
     except (KeyError, ValueError, TypeError):
         return jr({"error": "Ma'lumotlar noto'g'ri"}, 400)
     db.commit()
+    if act in ("ref", "ui_save", "ui_reset", "bg_save", "bg_reset"):
+        reload_settings()
     return jr({"data": admin_data()})
 
 
@@ -665,6 +732,20 @@ async def keepalive():
         except Exception:
             pass
         await asyncio.sleep(540)
+
+
+@web.middleware
+async def dbguard(request, handler):
+    try:
+        resp = await handler(request)
+    except web.HTTPException:
+        db.commit()
+        raise
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    return resp
 
 
 async def index(req):
@@ -750,6 +831,7 @@ async def cmd_setref(m: Message, command: CommandObject):
     if is_admin(m):
         db.execute("INSERT OR REPLACE INTO settings VALUES('ref',?)", (str(v),))
         db.commit()
+        reload_settings()
         await m.answer(f"✅ Do'st uchun mukofot: {v:g} $")
 
 
@@ -821,7 +903,7 @@ async def paid(m: Message):
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    app = web.Application(client_max_size=2 * 1024 * 1024)
+    app = web.Application(middlewares=[dbguard], client_max_size=2 * 1024 * 1024)
     app.add_routes(routes)
     app.router.add_get("/", index)
     app.router.add_get("/health", health)
