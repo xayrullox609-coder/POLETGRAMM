@@ -32,6 +32,7 @@ Vazifalar bajarib, do'stlaringizni taklif qilib pul yig'ing va istaganingizga eg
 
 Kanalimiz : @poletgram"""
 
+# Boshlang'ich xizmatlar (baza bo'sh bo'lganda bir marta yoziladi; keyin admin panelda boshqariladi)
 # [nom, narx ($), tavsif, minimal miqdor, ikonka, tez kunda(1/0), narx necha dona uchun]
 # Misol: ["Video Prasmotr", 2, ..., 500, "play", 0, 500]  ->  500 ta ko'rish = 2 $
 SERVICES = {
@@ -73,6 +74,8 @@ def pkg_list():
     return [dict(p, total=p["amount"] + p["bonus"], stars=stars_of(p), som=p["amount"] * 20) for p in PACKAGES]
 
 
+PLATFORMS = ["Instagram", "Telegram", "YouTube", "TikTok"]
+ICONS = {"play", "heart", "share", "user", "save"}
 TYPES = {"link", "youtube", "ad", "bot", "bonus"}
 
 bot = Bot(TOKEN)
@@ -83,6 +86,7 @@ CREATE TABLE IF NOT EXISTS tasks(id BIGSERIAL PRIMARY KEY,type TEXT,title TEXT,s
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS daily INTEGER DEFAULT 0;
 CREATE TABLE IF NOT EXISTS tlog(user_id BIGINT,task_id BIGINT,dayn BIGINT,n INTEGER,PRIMARY KEY(user_id,task_id,dayn));
 CREATE TABLE IF NOT EXISTS tcool(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
+CREATE TABLE IF NOT EXISTS services(id BIGSERIAL PRIMARY KEY,platform TEXT,name TEXT,descr TEXT,price DOUBLE PRECISION,pack INTEGER,minq INTEGER,icon TEXT,soon INTEGER DEFAULT 0,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS done(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS started(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS promos(code TEXT PRIMARY KEY,amount DOUBLE PRECISION,uses INTEGER);
@@ -153,7 +157,7 @@ class PG:
                 ",".join(f"{c}=EXCLUDED.{c}" for c in cols)
         elif s.startswith("INSERT OR IGNORE INTO"):
             s = "INSERT INTO" + s[len("INSERT OR IGNORE INTO"):] + " ON CONFLICT DO NOTHING"
-        elif re.match(r"INSERT INTO (tasks|orders)\b", s):
+        elif re.match(r"INSERT INTO (tasks|orders|services)\b", s):
             s += " RETURNING id"
         return s.replace("?", "%s")
 
@@ -226,6 +230,7 @@ CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT,name TEXT,
 CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,title TEXT,sub TEXT,url TEXT,reward REAL,active INTEGER DEFAULT 1,daily INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS tlog(user_id INTEGER,task_id INTEGER,dayn INTEGER,n INTEGER,PRIMARY KEY(user_id,task_id,dayn));
 CREATE TABLE IF NOT EXISTS tcool(user_id INTEGER,task_id INTEGER,ts INTEGER,PRIMARY KEY(user_id,task_id));
+CREATE TABLE IF NOT EXISTS services(id INTEGER PRIMARY KEY AUTOINCREMENT,platform TEXT,name TEXT,descr TEXT,price REAL,pack INTEGER,minq INTEGER,icon TEXT,soon INTEGER DEFAULT 0,active INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS done(user_id INTEGER,task_id INTEGER,ts INTEGER,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS started(user_id INTEGER,task_id INTEGER,ts INTEGER,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS promos(code TEXT PRIMARY KEY,amount REAL,uses INTEGER);
@@ -261,6 +266,39 @@ def setting(k, d):
 
 
 reload_settings()
+
+SVC = {}
+
+
+def reload_services():
+    SVC.clear()
+    for p in PLATFORMS:
+        SVC[p] = []
+    for r in db.execute("SELECT * FROM services WHERE active=1 ORDER BY id").fetchall():
+        SVC.setdefault(r["platform"], []).append(
+            [r["name"], r["price"], r["descr"] or "", r["minq"], r["icon"], r["soon"] or 0, r["pack"], r["id"]])
+
+
+def seed_services():
+    if db.execute("SELECT COUNT(*) AS c FROM services").fetchone()["c"]:
+        return
+    for p, items in SERVICES.items():
+        for it in items:
+            db.execute("INSERT INTO services(platform,name,descr,price,pack,minq,icon,soon) VALUES(?,?,?,?,?,?,?,?)",
+                       (p, it[0], it[2], float(it[1]), it[6], it[3], it[4], it[5]))
+    db.commit()
+
+
+def svc_by_id(sid):
+    for p, items in SVC.items():
+        for it in items:
+            if it[7] == sid:
+                return p, it
+    return None, None
+
+
+seed_services()
+reload_services()
 
 
 def touch(u, ref=None):
@@ -415,7 +453,7 @@ async def api_init(req):
            "daily": t["daily"] or 0, "cnt": cnt.get(t["id"], 0), "cd": cdleft(t),
            "done": (cnt.get(t["id"], 0) >= t["daily"]) if t["daily"] else (t["id"] in done)}
           for t in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")]
-    return jr({"me": me(uid), "tasks": ts, "svc": SERVICES, "ref": float(setting("ref", "20")),
+    return jr({"me": me(uid), "tasks": ts, "svc": SVC, "ref": float(setting("ref", "20")),
                 "reset_in": reset_in(), "admin": uid in ADMINS, "pkgs": pkg_list(), "ui": json.loads(setting("ui", "{}")),
                 "bgv": setting("bg_ver", ""), "theme": json.loads(setting("theme", "{}"))})
 
@@ -474,8 +512,9 @@ async def api_order(req):
     uid = need(req)
     b = await body(req)
     try:
-        it = next(x for x in SERVICES[b["platform"]] if x[0] == b["service"])
+        plat, it = svc_by_id(int(b["sid"]))
         qty = int(b["qty"])
+        assert it
     except Exception:
         return jr({"error": "Noto'g'ri so'rov"}, 400)
     if it[5]:
@@ -488,10 +527,10 @@ async def api_order(req):
     if db.execute("UPDATE users SET balance=balance-? WHERE id=? AND balance>=?", (cost, uid, cost)).rowcount == 0:
         return jr({"error": "Balans yetarli emas"}, 400)
     db.execute("INSERT INTO orders(user_id,platform,service,link,qty,cost,ts) VALUES(?,?,?,?,?,?,?)",
-               (uid, b["platform"], b["service"], link, qty, cost, int(time.time())))
+               (uid, plat, it[0], link, qty, cost, int(time.time())))
     db.commit()
     u = me(uid)
-    await notify_admins(f"🛒 Yangi buyurtma\n{u['name']} (ID {uid})\n{b['platform']} · {b['service']} × {qty}\n{link}\nNarx: {cost} $")
+    await notify_admins(f"🛒 Yangi buyurtma\n{u['name']} (ID {uid})\n{plat} · {it[0]} × {qty}\n{link}\nNarx: {cost} $")
     return jr({"me": u})
 
 
@@ -682,6 +721,8 @@ def admin_data():
         "ref": float(setting("ref", "20")),
         "ui": json.loads(setting("ui", "{}")),
         "bgv": setting("bg_ver", ""),
+        "svcs": {p: [dict(id=i[7], name=i[0], descr=i[2], price=i[1], pack=i[6], minq=i[3], icon=i[4], soon=i[5]) for i in v]
+                 for p, v in SVC.items()},
     }
 
 
@@ -734,6 +775,21 @@ async def api_admin(req):
             if not txt:
                 raise ValueError
             tell(int(b["id"]), txt[:4000])
+        elif act == "svc_save":
+            plat, icon, name = str(b.get("platform")), str(b.get("icon", "play")), str(b.get("name", "")).strip()[:60]
+            if plat not in PLATFORMS or icon not in ICONS or not name:
+                raise ValueError
+            price, pack, minq = float(b["price"]), int(b["pack"]), int(b["minq"])
+            if price <= 0 or pack < 1 or minq < 1:
+                raise ValueError
+            vals = (plat, name, str(b.get("descr", "")).strip()[:100], price, pack, minq, icon, 1 if b.get("soon") else 0)
+            sid = int(b.get("id") or 0)
+            if sid:
+                db.execute("UPDATE services SET platform=?,name=?,descr=?,price=?,pack=?,minq=?,icon=?,soon=? WHERE id=?", vals + (sid,))
+            else:
+                db.execute("INSERT INTO services(platform,name,descr,price,pack,minq,icon,soon) VALUES(?,?,?,?,?,?,?,?)", vals)
+        elif act == "svc_del":
+            db.execute("UPDATE services SET active=0 WHERE id=?", (int(b["id"]),))
         elif act == "task_add":
             typ = str(b.get("type"))
             if typ not in TYPES or not str(b.get("title", "")).strip():
@@ -791,6 +847,8 @@ async def api_admin(req):
     db.commit()
     if act in ("ref", "ui_save", "ui_reset", "bg_save", "bg_reset"):
         reload_settings()
+    if act in ("svc_save", "svc_del"):
+        reload_services()
     return jr({"data": admin_data()})
 
 
