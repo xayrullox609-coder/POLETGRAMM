@@ -1,9 +1,9 @@
-import re, math, base64, os, json, time, hmac, hashlib, sqlite3, asyncio, logging
+import io, html, re, math, base64, os, json, time, hmac, hashlib, sqlite3, asyncio, logging
 from urllib.parse import parse_qsl
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, CommandObject
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, MenuButtonWebApp, LabeledPrice, PreCheckoutQuery
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo, MenuButtonWebApp, LabeledPrice, PreCheckoutQuery, BufferedInputFile
 
 try:
     import psycopg2
@@ -21,6 +21,9 @@ PORT = int(os.environ.get("PORT", 8080))
 DB = os.environ.get("DB_PATH", "poletgram.db")
 HERE = os.path.dirname(os.path.abspath(__file__))
 TZ_OFFSET = float(os.environ.get("TZ_OFFSET_HOURS", 5))  # vaqt mintaqasi (O'zbekiston UTC+5)
+PROMO_CHANNEL = os.environ.get("PROMO_CHANNEL", "@poletgram")  # bo'sh qoldirsangiz, kanalga yuborilmaydi
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "Poletgram_bot")
+COOLDOWN = {"ad": 5}  # vazifa turi -> mukofotdan keyingi kutish (soniya)
 MIN_WAIT = 10  # vazifani tekshirishdan oldin kutish (soniya)
 
 START_TEXT = """🌐 Instagram va Telegram sahifalaringizni tekinga rivojlantiring ❤️‍🔥
@@ -79,6 +82,7 @@ CREATE TABLE IF NOT EXISTS users(id BIGINT PRIMARY KEY,username TEXT,name TEXT,b
 CREATE TABLE IF NOT EXISTS tasks(id BIGSERIAL PRIMARY KEY,type TEXT,title TEXT,sub TEXT,url TEXT,reward DOUBLE PRECISION,active INTEGER DEFAULT 1,daily INTEGER DEFAULT 0);
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS daily INTEGER DEFAULT 0;
 CREATE TABLE IF NOT EXISTS tlog(user_id BIGINT,task_id BIGINT,dayn BIGINT,n INTEGER,PRIMARY KEY(user_id,task_id,dayn));
+CREATE TABLE IF NOT EXISTS tcool(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS done(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS started(user_id BIGINT,task_id BIGINT,ts BIGINT,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS promos(code TEXT PRIMARY KEY,amount DOUBLE PRECISION,uses INTEGER);
@@ -90,7 +94,7 @@ CREATE INDEX IF NOT EXISTS users_ref ON users(ref_by);
 CREATE INDEX IF NOT EXISTS users_uname ON users(lower(username));
 """
 
-UPSERT = {"settings": ("k", ["v"]), "promos": ("code", ["amount", "uses"])}
+UPSERT = {"settings": ("k", ["v"]), "promos": ("code", ["amount", "uses"]), "tcool": ("user_id,task_id", ["ts"])}
 
 
 class Row(dict):
@@ -221,6 +225,7 @@ else:
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT,name TEXT,balance REAL DEFAULT 0,ref_by INTEGER,ref_paid INTEGER DEFAULT 0,created INTEGER);
 CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY AUTOINCREMENT,type TEXT,title TEXT,sub TEXT,url TEXT,reward REAL,active INTEGER DEFAULT 1,daily INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS tlog(user_id INTEGER,task_id INTEGER,dayn INTEGER,n INTEGER,PRIMARY KEY(user_id,task_id,dayn));
+CREATE TABLE IF NOT EXISTS tcool(user_id INTEGER,task_id INTEGER,ts INTEGER,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS done(user_id INTEGER,task_id INTEGER,ts INTEGER,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS started(user_id INTEGER,task_id INTEGER,ts INTEGER,PRIMARY KEY(user_id,task_id));
 CREATE TABLE IF NOT EXISTS promos(code TEXT PRIMARY KEY,amount REAL,uses INTEGER);
@@ -353,6 +358,11 @@ def task_count(uid, t):
 
 
 def task_blocked(uid, t):
+    cd = COOLDOWN.get(t["type"], 0)
+    if cd:
+        r = db.execute("SELECT ts FROM tcool WHERE user_id=? AND task_id=?", (uid, t["id"])).fetchone()
+        if r and time.time() * 1000 - r["ts"] < cd * 1000:
+            return "Biroz kuting"
     if t["daily"]:
         if task_count(uid, t) >= t["daily"]:
             return "Bugungi limit tugadi. Ertaga qayta urinib ko'ring"
@@ -395,8 +405,14 @@ async def api_init(req):
     uid = need(req)
     done = {r[0] for r in db.execute("SELECT task_id FROM done WHERE user_id=?", (uid,))}
     cnt = {r[0]: r[1] for r in db.execute("SELECT task_id,n FROM tlog WHERE user_id=? AND dayn=?", (uid, today()))}
+    cool = {r[0]: r[1] for r in db.execute("SELECT task_id,ts FROM tcool WHERE user_id=?", (uid,))}
+    now_ms = time.time() * 1000
+
+    def cdleft(t):
+        c = COOLDOWN.get(t["type"], 0)
+        return max(0, math.ceil(c - (now_ms - cool[t["id"]]) / 1000)) if c and t["id"] in cool else 0
     ts = [{"id": t["id"], "type": t["type"], "title": t["title"], "sub": t["sub"], "reward": t["reward"],
-           "daily": t["daily"] or 0, "cnt": cnt.get(t["id"], 0),
+           "daily": t["daily"] or 0, "cnt": cnt.get(t["id"], 0), "cd": cdleft(t),
            "done": (cnt.get(t["id"], 0) >= t["daily"]) if t["daily"] else (t["id"] in done)}
           for t in db.execute("SELECT * FROM tasks WHERE active=1 ORDER BY id")]
     return jr({"me": me(uid), "tasks": ts, "svc": SERVICES, "ref": float(setting("ref", "20")),
@@ -445,6 +461,8 @@ async def api_claim(req):
         except IntegrityErr:
             return jr({"error": "Bu vazifa allaqachon bajarilgan"}, 400)
     db.execute("DELETE FROM started WHERE user_id=? AND task_id=?", (uid, t["id"]))
+    if COOLDOWN.get(t["type"]):
+        db.execute("INSERT OR REPLACE INTO tcool VALUES(?,?,?)", (uid, t["id"], int(time.time() * 1000)))
     db.execute("UPDATE users SET balance=balance+? WHERE id=?", (t["reward"], uid))
     db.commit()
     await pay_ref(uid)
@@ -565,6 +583,91 @@ def clean_theme(raw):
     return {k: v for k, v in raw.items() if k in THEME_KEYS and isinstance(v, str) and HEX.match(v)}
 
 
+def make_promo_img(bg, code, amount, uses, accent):
+    from PIL import Image, ImageDraw, ImageFont
+    W, H = 1080, 1350
+    if bg:
+        im = Image.open(io.BytesIO(bg)).convert("RGB")
+        k = max(W / im.width, H / im.height)
+        im = im.resize((int(im.width * k) + 1, int(im.height * k) + 1))
+        l, tp = (im.width - W) // 2, (im.height - H) // 2
+        im = im.crop((l, tp, l + W, tp + H))
+    else:
+        im = Image.new("RGB", (W, H), (228, 238, 251))
+    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+    d.rounded_rectangle((80, 200, W - 80, 1150), radius=70, fill=(255, 255, 255, 238))
+    dark, grey = (15, 31, 58), (86, 106, 133)
+
+    def font(size):
+        for f in ("DejaVuSans-Bold.ttf", "LiberationSans-Bold.ttf", "Arial Bold.ttf"):
+            try:
+                return ImageFont.truetype(f, size)
+            except Exception:
+                pass
+        try:
+            return ImageFont.load_default(size)
+        except Exception:
+            return ImageFont.load_default()
+
+    def center(text, y, size, fill, maxw=W - 260):
+        f = font(size)
+        while size > 20 and d.textlength(text, font=f) > maxw:
+            size -= 6
+            f = font(size)
+        d.text(((W - d.textlength(text, font=f)) / 2, y), text, font=f, fill=fill)
+
+    center("POLETGRAM", 255, 46, accent)
+    center("PROMOKOD", 330, 96, dark)
+    d.rounded_rectangle((150, 470, W - 150, 670), radius=40, fill=tuple(int(c + (255 - c) * 0.88) for c in accent), outline=accent, width=6)
+    center(code, 515, 120, accent, maxw=W - 340)
+    center(f"+{amount:g} $", 730, 150, dark)
+    center(f"{uses} kishi ishlata oladi", 920, 46, grey)
+    center("Profil > Promokod bo'limiga kiriting", 1005, 40, grey)
+    center("@" + BOT_USERNAME, 1070, 46, accent)
+    return_im = Image.alpha_composite(im.convert("RGBA"), ov).convert("RGB")
+    out = io.BytesIO()
+    return_im.save(out, "JPEG", quality=90)
+    return out.getvalue()
+
+
+def promo_bg_bytes():
+    r = db.execute("SELECT v FROM settings WHERE k='bg_img'").fetchone()
+    if r:
+        return base64.b64decode(r["v"])
+    try:
+        with open(os.path.join(HERE, "index.html"), encoding="utf-8") as f:
+            m = re.search(r"url\(data:image/jpeg;base64,([A-Za-z0-9+/=]+)\)", f.read())
+        return base64.b64decode(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def accent_rgb():
+    try:
+        h = json.loads(setting("theme", "{}")).get("a2", "#1f7bff")
+        return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+    except Exception:
+        return (31, 123, 255)
+
+
+async def post_promo(code, amount, uses):
+    """Yangi promokodni kanalga rasm bilan avtomatik yuboradi."""
+    if not PROMO_CHANNEL:
+        return
+    try:
+        bg, acc = promo_bg_bytes(), accent_rgb()
+        data = await asyncio.to_thread(make_promo_img, bg, code, amount, uses, acc)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚀 Ilovani ochish", url=f"https://t.me/{BOT_USERNAME}")]])
+        cap = (f"🎁 <b>Yangi promokod!</b>\n\nKod: <code>{html.escape(code)}</code>\nBonus: <b>+{amount:g} $</b>\n"
+               f"Limit: {uses} kishi\n\nIlovada Profil → Promokod bo'limiga kiriting 👇")
+        await bot.send_photo(PROMO_CHANNEL, BufferedInputFile(data, "promo.jpg"), caption=cap, parse_mode="HTML", reply_markup=kb)
+        await notify_admins(f"✅ Promokod {code} {PROMO_CHANNEL} kanaliga yuborildi")
+    except Exception as e:
+        logging.exception("promo post")
+        await notify_admins(f"⚠️ Promokodni {PROMO_CHANNEL} kanaliga yuborib bo'lmadi: {e}\nBotni kanalga admin qiling (xabar yuborish huquqi bilan).")
+
+
 def admin_data():
     u = db.execute("SELECT (SELECT COUNT(*) FROM users) AS c,(SELECT COALESCE(SUM(balance),0) FROM users) AS b,"
                     "(SELECT COUNT(*) FROM orders) AS o").fetchone()
@@ -642,7 +745,9 @@ async def api_admin(req):
         elif act == "task_del":
             db.execute("UPDATE tasks SET active=0 WHERE id=?", (int(b["id"]),))
         elif act == "promo_add":
-            db.execute("INSERT OR REPLACE INTO promos VALUES(?,?,?)", (str(b["code"]).strip().upper(), float(b["amount"]), int(b["uses"])))
+            pc, pa, pu = str(b["code"]).strip().upper(), float(b["amount"]), int(b["uses"])
+            db.execute("INSERT OR REPLACE INTO promos VALUES(?,?,?)", (pc, pa, pu))
+            asyncio.create_task(post_promo(pc, pa, pu))
         elif act == "promo_del":
             db.execute("DELETE FROM promos WHERE code=?", (str(b["code"]),))
         elif act == "ref":
@@ -817,6 +922,7 @@ async def cmd_addpromo(m: Message, command: CommandObject):
         c, a, n = (command.args or "").split()
         db.execute("INSERT OR REPLACE INTO promos VALUES(?,?,?)", (c.upper(), float(a), int(n)))
         db.commit()
+        asyncio.create_task(post_promo(c.upper(), float(a), int(n)))
         await m.answer(f"✅ {c.upper()} — {a} $ × {n} marta")
     except Exception:
         await m.answer("Format: /addpromo KOD summa limit")

@@ -81,7 +81,7 @@ const STY={
 const tg=window.Telegram&&Telegram.WebApp;
 try{if(tg){tg.ready();tg.expand();try{if(tg.isFullscreen&&tg.exitFullscreen)tg.exitFullscreen()}catch(e){}tg.setHeaderColor("#cfe3fb");tg.setBackgroundColor("#e4eefb");tg.setBottomBarColor("#e4eefb")}}catch(e){}
 const BOT="Poletgram_bot";
-let S={tab:"boost",plat:null,me:{id:0,name:"",balance:0},tasks:[],svc:{},ref:20,ui:{},pkgs:[],prev:"boost",theme:{},bgv:"",pvbg:null,resetAt:0},ST={};
+let S={tab:"boost",plat:null,me:{id:0,name:"",balance:0},tasks:[],svc:{},ref:20,ui:{},pkgs:[],prev:"boost",theme:{},bgv:"",pvbg:null,resetAt:0},ST={},CD={};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const L=(k,d)=>esc((S.ui[k]&&S.ui[k].label)||d);
@@ -92,7 +92,7 @@ async function api(p,b){
  try{const r=await fetch("/api/"+p,{method:"POST",headers:{"Content-Type":"application/json","X-Init":tg?tg.initData:""},body:JSON.stringify(b||{})});
   const j=await r.json();if(!r.ok)throw new Error(j.error||"Xatolik");return j}
  catch(e){toast(e.message);throw e}}
-async function load(){const d=await api("init");S.me=d.me;S.tasks=d.tasks;S.svc=d.svc;S.ref=d.ref;S.admin=d.admin;S.ui=d.ui||{};S.pkgs=d.pkgs||[];S.theme=d.theme||{};S.bgv=d.bgv||"";S.pvbg=null;S.resetAt=Date.now()+(d.reset_in||0)*1000;render()}
+async function load(){const d=await api("init");S.me=d.me;S.tasks=d.tasks;S.tasks.forEach(t=>{if(t.cd>0)CD[t.id]=Date.now()+t.cd*1000});S.svc=d.svc;S.ref=d.ref;S.admin=d.admin;S.ui=d.ui||{};S.pkgs=d.pkgs||[];S.theme=d.theme||{};S.bgv=d.bgv||"";S.pvbg=null;S.resetAt=Date.now()+(d.reset_in||0)*1000;render()}
 const PH=(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user&&tg.initDataUnsafe.user.photo_url)||"";
 const ini=()=>((S.me.name||"?").replace("@","").charAt(0)||"?").toUpperCase();
 const AV=x=>`<div class="av"><b>${esc(ini())}</b>${PH?`<img src="${esc(PH)}" referrerpolicy="no-referrer" alt="" onerror="this.remove()">`:""}</div>`;
@@ -115,7 +115,7 @@ const BT={link:"Ochish",youtube:"Ochish",ad:"Ko'rish",bot:"Start",bonus:"Bajaris
 function leftTxt(){const m=Math.ceil(Math.max(0,S.resetAt-Date.now())/60000),h=Math.floor(m/60),mm=m%60;return h?`${h} soat ${mm} daq`:`${mm} daq`}
 function tasks(){
  const rows=S.tasks.map(t=>{const x=TI[t.type]||TI.link,lab=t.done?L("tb_done","Bajarildi"):ST[t.id]?L("tb_check","Tekshirish"):L("tb_"+t.type,BT[t.type]||"Ochish");
-  const ex=t.daily>0&&t.cnt>=t.daily,btn=ex?`<span class="tl">⏳ ${leftTxt()}</span>`:`<button class="btn" data-k="tb_${t.type}" ${t.done?"disabled":""} onclick="tap(${t.id})">${lab}</button>`,tag=`<span class="tag">+${num(t.reward)} $</span>`;
+  const ex=t.daily>0&&t.cnt>=t.daily,cdl=CD[t.id]>Date.now()?Math.ceil((CD[t.id]-Date.now())/1000):0,btn=ex?`<span class="tl">⏳ ${leftTxt()}</span>`:cdl?`<button class="btn" data-k="tb_${t.type}" disabled>${cdl}</button>`:`<button class="btn" data-k="tb_${t.type}" ${t.done?"disabled":""} onclick="tap(${t.id})">${lab}</button>`,tag=`<span class="tag">+${num(t.reward)} $</span>`;
   if(t.type=="bonus")return `<div class="row bn"><div class="ic" style="background:conic-gradient(#ff3d9a,#ffb300,#2ee6a6,#3d7bff,#b53dff,#ff3d9a);color:#fff;font-size:15px;width:41px;height:41px">⫶</div><div class="grow"><b>${esc(t.title)}</b>${tag}</div>${btn}</div>`;
   return `<div class="row"><div class="ic" style="background:${x[0]};${t.type=="youtube"?"border-radius:12px;color:#fff;font-size:15px":""}">${x[1]}</div><div class="grow"><b>${esc(t.title)}</b><small>${esc(t.sub)}${t.daily?`${t.sub?" • ":""}Bugun: ${t.cnt}/${t.daily}`:""}</small></div>${tag}${btn}</div>`}).join("")
  ||`<div class="row"><div class="grow"><b>Hozircha vazifalar yo'q</b><small>Tez orada yangi vazifalar qo'shiladi</small></div></div>`;
@@ -126,7 +126,7 @@ async function tap(id){
  const t=S.tasks.find(x=>x.id==id);if(!t||t.done)return;
  if(t.type!="bonus"&&!ST[id]){const r=await api("task/start",{id});ST[id]=Date.now();go(r.url);render();return}
  if(t.type!="bonus"&&Date.now()-ST[id]<10000)return toast("Vazifani bajaring, kamida 10 soniya kuting");
- const r=await api("task/claim",{id});S.me=r.me;t.cnt=(t.cnt||0)+1;t.done=t.daily?t.cnt>=t.daily:true;delete ST[id];toast("+"+num(t.reward)+" $");render()}
+ const r=await api("task/claim",{id});S.me=r.me;t.cnt=(t.cnt||0)+1;t.done=t.daily?t.cnt>=t.daily:true;delete ST[id];if(t.type=="ad")CD[id]=Date.now()+5000;toast("+"+num(t.reward)+" $");render()}
 function invite(){const l=`https://t.me/${BOT}?start=ref_${S.me.id}`;
  S.sh=`https://t.me/share/url?url=${encodeURIComponent(l)}&text=${encodeURIComponent("Poletgram — vazifa bajarib pul yig'ing 💸").replace(/'/g,"%27")}`;
  sheet(`<h2>Do'st Taklif Qilish</h2><p style="color:var(--t-tx2,#566a85);margin:4px 0">Har bir faol do'stingiz uchun +${num(S.ref)} $</p><p style="margin:2px 0 8px;font-weight:700">Taklif qilganlar: ${S.me.refs||0} · Faol: ${S.me.active||0}</p><input readonly id="rl" value="${l}" onclick="this.select()"><button class="btn" style="width:100%;margin-top:8px" onclick="go(S.sh)">Ulashish</button><button class="btn" style="width:100%;margin-top:8px;background:var(--t-s1,#dcebff);color:var(--t-a2,#1f7bff);box-shadow:none" onclick="copyRef()">Nusxa olish</button>`)}
@@ -155,8 +155,8 @@ function admin(){const a=S.adm;if(!a)return `<button class="back" onclick="S.tab
  <button class="btn" style="width:100%;margin-bottom:12px" onclick="S.tab='uied';render();scrollTo(0,0)">🎨 Tugmalarni tahrirlash</button><div class="card"><h3>Orqa fon rasmi va mavzu</h3><small>Rasm tanlang: ilovaning ranglari (tugmalar, kartalar, ramkalar, matn) rasm rangiga moslab avtomatik o'zgaradi.</small><input type="file" accept="image/*" id="bgf" onchange="bgPick(this)"><div id="bgprev"></div><button class="btn w" id="bgsave" disabled onclick="bgSave()">Saqlash va qo'llash</button><button class="mini" style="width:100%;margin-top:8px;padding:9px" onclick="bgReset()">Asl rasm va mavzuga qaytarish</button></div>
  <div class="card"><h3>Vazifalar</h3>${a.tasks.map(t=>`<div class="li"><div class="grow"><b>${esc(t.title)}</b><small>${TN[t.type]} · +${num(t.reward)} $ · ${t.daily?"kuniga "+t.daily+" marta":"bir martalik"} · ${esc(t.url)}</small></div>${x("admL('task_del',{id:"+t.id+"})")}</div>`).join("")||"<small>Vazifa yo'q</small>"}
  <select id="tt">${Object.entries(TN).map(([k,n])=>`<option value="${k}">${n}</option>`).join("")}</select><input id="tti" placeholder="Sarlavha"><input id="tsu" placeholder="Tavsif"><input id="tur" placeholder="Havola (https://...)"><input id="trw" type="number" step="0.01" placeholder="Mukofot ($)"><input id="tdl" type="number" min="0" placeholder="Kuniga necha marta (0 = bir martalik)"><button class="btn w" onclick="admL('task_add',{type:v('tt'),title:v('tti'),sub:v('tsu'),url:v('tur'),reward:v('trw'),daily:v('tdl')})">Vazifa qo'shish</button></div>
- <div class="card"><h3>Promokodlar</h3>${a.promos.map(p=>`<div class="li"><div class="grow"><b>${esc(p.code)}</b><small>${num(p.amount)} $ · qoldi: ${p.uses}</small></div>${x("adm('promo_del',{code:'"+esc(p.code)+"'})")}</div>`).join("")||"<small>Promokod yo'q</small>"}
- <input id="pcd" placeholder="KOD"><input id="pam" type="number" step="0.01" placeholder="Summa ($)"><input id="pus" type="number" placeholder="Necha marta ishlatiladi"><button class="btn w" onclick="adm('promo_add',{code:v('pcd'),amount:v('pam'),uses:v('pus')})">Promokod qo'shish</button></div>
+ <div class="card"><h3>Promokodlar</h3><small>Yangi promokod qoʻshilganda @poletgram kanaliga rasm bilan avtomatik yuboriladi.</small>${a.promos.map(p=>`<div class="li"><div class="grow"><b>${esc(p.code)}</b><small>${num(p.amount)} $ · qoldi: ${p.uses}</small></div>${x("adm('promo_del',{code:'"+esc(p.code)+"'})")}</div>`).join("")||"<small>Promokod yo'q</small>"}
+ <input id="pcd" placeholder="KOD"><input id="pam" type="number" step="0.01" placeholder="Summa ($)"><input id="pus" type="number" placeholder="Necha marta ishlatiladi"><button class="btn w" onclick="adm('promo_add',{code:v('pcd'),amount:v('pam'),uses:v('pus')},'Promokod saqlandi, kanalga yuborilmoqda ✓')">Promokod qo'shish</button></div>
  <div class="card"><h3>Do'st taklif mukofoti</h3><input id="rfa" type="number" step="0.01" value="${a.ref}"><button class="btn w" onclick="admL('ref',{amount:v('rfa')})">Saqlash</button></div>
  <div class="card"><h3>Balans qo'shish / ayirish</h3><input id="bu" placeholder="ID yoki @username"><input id="ba" type="number" step="0.01" placeholder="Summa (ayirish uchun minus)"><button class="btn w" onclick="adm('bal',{user:v('bu'),amount:v('ba')})">Bajarish</button></div>
  <div class="card"><h3>Hammaga xabar</h3><textarea id="pt" rows="3" placeholder="Xabar matni"></textarea><button class="btn w" onclick="adm('post',{text:$('#pt').value},'Yuborilmoqda…')">Yuborish</button></div>
@@ -269,6 +269,7 @@ function render(){
  const act=(S.tab=="admin"||S.tab=="uied"||S.tab=="users"||S.tab=="uprof")?"profile":S.tab=="topup"?(S.prev||"boost"):S.tab;
  n.innerHTML=NAV.slice().sort((a,b)=>ordOf("nav_"+a[0])-ordOf("nav_"+b[0])).map(t=>`<button data-k="nav_${t[0]}" class="${act==t[0]?"on":""}" onclick="S.tab='${t[0]}';S.plat=null;render();scrollTo(0,0)"><svg viewBox="0 0 24 24">${t[1]}</svg>${L("nav_"+t[0],t[2])}</button>`).join("");
  applyUI()}
+setInterval(()=>{const n=Date.now();if(S.tab=="tasks"&&Object.values(CD).some(e=>e>n-1100))render()},1000);
 setInterval(()=>{if(S.tab=="tasks"&&S.tasks.some(t=>t.daily>0&&t.cnt>=t.daily)){if(Date.now()>=S.resetAt)load();else render()}},30000);
 $("#app").innerHTML="<p style='padding:60px 0;text-align:center;font-weight:600'>Yuklanmoqda…</p>";
 load().catch(()=>{$("#app").innerHTML="<p style='padding:60px 20px;text-align:center;font-weight:600'>Ilovani Telegramdagi @"+BOT+" boti orqali oching</p>"});
